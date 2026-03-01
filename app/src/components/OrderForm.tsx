@@ -28,7 +28,6 @@ export default function OrderForm({ marketId, marketYesPriceBps }: OrderFormProp
   const { deposit: shieldDeposit } = useDeposit();
 
   const [side, setSide] = useState<Side>("YES");
-  const [price, setPrice] = useState("50");
   const [amount, setAmount] = useState("10");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [step, setStep] = useState("");
@@ -38,25 +37,18 @@ export default function OrderForm({ marketId, marketYesPriceBps }: OrderFormProp
   const contractsReady =
     isConfiguredAddress(CONTRACTS.PRIVATE_MARKET) &&
     isConfiguredAddress(CONTRACTS.WMON);
+  const effectiveYesPriceBps = marketYesPriceBps !== undefined
+    ? Math.min(9900, Math.max(100, Math.round(marketYesPriceBps)))
+    : 5000;
+  const usingFallbackPrice = marketYesPriceBps === undefined;
+  const marketSidePriceBps = side === "YES" ? effectiveYesPriceBps : 10000 - effectiveYesPriceBps;
+  const marketSidePricePct = marketSidePriceBps / 100;
   const parsedAmount = Number.parseFloat(amount);
-  const parsedPrice = Number.parseFloat(price);
   const hasValidAmount = Number.isFinite(parsedAmount) && parsedAmount > 0;
-  const hasValidPrice = Number.isFinite(parsedPrice) && parsedPrice > 0;
-  const marketSidePrice = marketYesPriceBps !== undefined
-    ? side === "YES"
-      ? marketYesPriceBps / 100
-      : (10000 - marketYesPriceBps) / 100
-    : null;
-  const marketPayout = hasValidAmount && marketSidePrice && marketSidePrice > 0
-    ? (parsedAmount / (marketSidePrice / 100)).toFixed(2)
+  const marketPayout = hasValidAmount && marketSidePricePct > 0
+    ? (parsedAmount / (marketSidePricePct / 100)).toFixed(2)
     : "—";
-  const orderPayout = hasValidAmount && hasValidPrice
-    ? (parsedAmount / (parsedPrice / 100)).toFixed(2)
-    : "0.00";
-  const marketReturn = marketSidePrice && marketSidePrice > 0
-    ? `${(100 / marketSidePrice).toFixed(1)}x`
-    : "—";
-  const orderReturn = hasValidPrice ? `${(100 / parsedPrice).toFixed(1)}x` : "—";
+  const marketReturn = marketSidePricePct > 0 ? `${(100 / marketSidePricePct).toFixed(1)}x` : "—";
 
   const waitForHash = async (hash?: `0x${string}`) => {
     if (!hash || !publicClient) return;
@@ -306,7 +298,7 @@ export default function OrderForm({ marketId, marketYesPriceBps }: OrderFormProp
     setIsSubmitting(true);
 
     try {
-      const priceInBps = Math.round(parseFloat(price) * 100);
+      const priceInBps = marketSidePriceBps;
       const amountWei = parseEther(amount);
 
       if (usePrivacy && walletExists && ready) {
@@ -481,29 +473,6 @@ export default function OrderForm({ marketId, marketYesPriceBps }: OrderFormProp
         </button>
       </div>
 
-      {/* Price input */}
-      <div>
-        <label className="block text-xs text-white/40 mb-1">
-          {side} price (% of payout)
-        </label>
-        <div className="flex items-center gap-2">
-          <input
-            type="range"
-            min="1"
-            max="99"
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-            className="flex-1 accent-violet-500"
-          />
-          <span className="text-sm font-mono text-white w-12 text-right">{price}%</span>
-        </div>
-        <div className="flex justify-between text-xs text-white/20 mt-1">
-          <span>1%</span>
-          <span>50%</span>
-          <span>99%</span>
-        </div>
-      </div>
-
       {/* Amount input */}
       <div>
         <label className="block text-xs text-white/40 mb-1">Amount (MON)</label>
@@ -537,21 +506,19 @@ export default function OrderForm({ marketId, marketYesPriceBps }: OrderFormProp
           <span className="font-mono text-white">{amount || "0"} MON</span>
         </div>
         <div className="flex justify-between text-white/40 mt-1">
-          <span>Potential payout (market)</span>
+          <span>{side} market price</span>
+          <span className="font-mono text-white">{marketSidePricePct.toFixed(1)}%</span>
+        </div>
+        <div className="flex justify-between text-white/40 mt-1">
+          <span>Potential payout</span>
           <span className="font-mono text-white">
             {marketPayout === "—" ? "—" : `${marketPayout} MON`}
           </span>
         </div>
-        <div className="flex justify-between text-white/35 mt-1">
-          <span>Potential payout (order)</span>
-          <span className="font-mono text-white">
-            {orderPayout} MON
-          </span>
-        </div>
         <div className="flex justify-between text-white/30 mt-1">
-          <span>Return (market / order)</span>
+          <span>Return</span>
           <span className="font-mono">
-            {marketReturn} / {orderReturn}
+            {marketReturn}
           </span>
         </div>
       </div>
@@ -575,7 +542,7 @@ export default function OrderForm({ marketId, marketYesPriceBps }: OrderFormProp
       >
         {isSubmitting
           ? step
-          : `${usePrivacy && walletExists ? "Private " : ""}Buy ${side} @ ${price}%`}
+          : `${usePrivacy && walletExists ? "Private " : ""}Buy ${side}`}
       </button>
 
       {!address && (
@@ -591,7 +558,9 @@ export default function OrderForm({ marketId, marketYesPriceBps }: OrderFormProp
       )}
 
       <p className="text-xs text-white/25 text-center">
-        Orders persist across batches until matched. Both YES and NO orders are needed for price discovery.
+        {usingFallbackPrice
+          ? "Using 50/50 startup price until the first matched batch is cleared."
+          : "Order uses current market-implied price. Orders persist across batches until matched."}
       </p>
     </div>
   );
