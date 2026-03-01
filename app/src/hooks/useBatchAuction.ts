@@ -6,6 +6,13 @@ import { PRIVATEMARKET_ABI } from "@/lib/contracts";
 import { CONTRACTS } from "@/lib/config";
 import { useClearBatch } from "./usePrivateMarket";
 
+interface BatchOrder {
+  side: number | bigint;
+  price: bigint;
+  amount: bigint;
+  filled: boolean;
+}
+
 export function useBatchTimer(marketId: number, batchInterval: number, lastClearTime: number) {
   const [timeLeft, setTimeLeft] = useState(0);
   const [canClear, setCanClear] = useState(false);
@@ -44,29 +51,52 @@ export function useBatchAuction(marketId: number) {
     query: { enabled: currentBatchId !== undefined },
   });
 
-  const { clearBatch, isConfirming, isSuccess } = useClearBatch();
+  const { clearBatch, hash: clearHash, isSubmitting, isConfirming, isSuccess, clearError } = useClearBatch();
   const [autoClear, setAutoClear] = useState(true);
   const autoClearFiredRef = useRef(false);
+  const handledClearHashRef = useRef<`0x${string}` | undefined>(undefined);
+  const orders = (batchOrders ?? []) as readonly BatchOrder[];
+  const activeOrders = orders.filter((order) => !order.filled && order.amount > 0n);
+  const yesOrders = activeOrders.filter((order) => Number(order.side) === 0);
+  const noOrders = activeOrders.filter((order) => Number(order.side) === 1);
+  const hasBothSides = yesOrders.length > 0 && noOrders.length > 0;
+  const maxYesPrice = yesOrders.reduce((max, order) => (order.price > max ? order.price : max), 0n);
+  const maxNoPrice = noOrders.reduce((max, order) => (order.price > max ? order.price : max), 0n);
+  const hasExecutableOrders = hasBothSides && maxYesPrice + maxNoPrice >= 10000n;
 
   const triggerClear = useCallback(() => {
     clearBatch(marketId);
   }, [clearBatch, marketId]);
 
+  useEffect(() => {
+    autoClearFiredRef.current = false;
+  }, [currentBatchId]);
+
+  useEffect(() => {
+    if (clearError) {
+      autoClearFiredRef.current = false;
+    }
+  }, [clearError]);
+
   // Refetch data after successful clear
   useEffect(() => {
-    if (isSuccess) {
-      autoClearFiredRef.current = false;
+    if (isSuccess && clearHash && handledClearHashRef.current !== clearHash) {
+      handledClearHashRef.current = clearHash;
       refetchBatchId();
       refetchOrders();
     }
-  }, [isSuccess, refetchBatchId, refetchOrders]);
+  }, [isSuccess, clearHash, refetchBatchId, refetchOrders]);
 
   return {
     currentBatchId: currentBatchId ? Number(currentBatchId) : 0,
-    orderCount: batchOrders?.length ?? 0,
+    orderCount: activeOrders.length,
+    hasBothSides,
+    hasExecutableOrders,
     triggerClear,
-    isClearing: isConfirming,
+    clearHash,
+    isClearing: isSubmitting || isConfirming,
     clearSuccess: isSuccess,
+    clearError,
     autoClear,
     setAutoClear,
     autoClearFiredRef,

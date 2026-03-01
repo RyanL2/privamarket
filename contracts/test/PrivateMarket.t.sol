@@ -164,6 +164,95 @@ contract PrivateMarketTest is Test {
         assertEq(uint8(nextOrders[0].side), uint8(PrivateMarket.Side.YES));
     }
 
+    function test_clearBatch_partialFill_carriesRemainingAmount() public {
+        market.createMarket("Test?", block.timestamp + 1 days, 5);
+
+        vm.startPrank(alice);
+        wmon.approve(address(market), 1000 ether);
+        market.placeOrder(0, PrivateMarket.Side.YES, 6000, 1000 ether);
+        vm.stopPrank();
+
+        vm.startPrank(bob);
+        wmon.approve(address(market), 500 ether);
+        market.placeOrder(0, PrivateMarket.Side.NO, 5000, 500 ether);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 6);
+        market.clearBatch(0);
+
+        PrivateMarket.BatchResult memory result = market.getBatchResult(0, 0);
+        assertEq(result.clearingPrice, 5000);
+        assertEq(result.yesVolume, 500 ether);
+        assertEq(result.noVolume, 500 ether);
+
+        PrivateMarket.Order[] memory nextOrders = market.getBatchOrders(0, 1);
+        assertEq(nextOrders.length, 1);
+        assertEq(nextOrders[0].trader, alice);
+        assertEq(nextOrders[0].amount, 500 ether);
+        assertEq(uint8(nextOrders[0].side), uint8(PrivateMarket.Side.YES));
+    }
+
+    function test_clearBatch_partialFill_proRataAcrossEligibleOrders() public {
+        market.createMarket("Test?", block.timestamp + 1 days, 5);
+
+        vm.startPrank(alice);
+        wmon.approve(address(market), 800 ether);
+        market.placeOrder(0, PrivateMarket.Side.YES, 6000, 800 ether);
+        vm.stopPrank();
+
+        vm.startPrank(charlie);
+        wmon.approve(address(market), 200 ether);
+        market.placeOrder(0, PrivateMarket.Side.YES, 6000, 200 ether);
+        vm.stopPrank();
+
+        vm.startPrank(bob);
+        wmon.approve(address(market), 500 ether);
+        market.placeOrder(0, PrivateMarket.Side.NO, 5000, 500 ether);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 6);
+        market.clearBatch(0);
+
+        PrivateMarket.BatchResult memory result = market.getBatchResult(0, 0);
+        assertEq(result.yesVolume, 500 ether);
+        assertEq(result.noVolume, 500 ether);
+
+        PrivateMarket.Order[] memory nextOrders = market.getBatchOrders(0, 1);
+        assertEq(nextOrders.length, 2);
+        assertEq(nextOrders[0].trader, alice);
+        assertEq(nextOrders[0].amount, 400 ether);
+        assertEq(nextOrders[1].trader, charlie);
+        assertEq(nextOrders[1].amount, 100 ether);
+    }
+
+    function test_clearBatch_carriesForwardWhenPricesDoNotCross() public {
+        market.createMarket("Test?", block.timestamp + 1 days, 5);
+
+        vm.startPrank(alice);
+        wmon.approve(address(market), 100 ether);
+        market.placeOrder(0, PrivateMarket.Side.YES, 9000, 100 ether);
+        vm.stopPrank();
+
+        vm.startPrank(bob);
+        wmon.approve(address(market), 100 ether);
+        market.placeOrder(0, PrivateMarket.Side.NO, 500, 100 ether);
+        vm.stopPrank();
+
+        vm.warp(block.timestamp + 6);
+        market.clearBatch(0);
+
+        PrivateMarket.BatchResult memory result = market.getBatchResult(0, 0);
+        assertEq(result.yesVolume, 0);
+        assertEq(result.noVolume, 0);
+
+        PrivateMarket.Order[] memory nextOrders = market.getBatchOrders(0, 1);
+        assertEq(nextOrders.length, 2);
+        assertEq(nextOrders[0].trader, alice);
+        assertEq(nextOrders[0].amount, 100 ether);
+        assertEq(nextOrders[1].trader, bob);
+        assertEq(nextOrders[1].amount, 100 ether);
+    }
+
     function test_cancelOrder() public {
         market.createMarket("Test?", block.timestamp + 1 days, 5);
 

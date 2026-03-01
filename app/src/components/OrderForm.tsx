@@ -10,6 +10,7 @@ import { privateKeyToAccount } from "viem/accounts";
 
 interface OrderFormProps {
   marketId: number;
+  marketYesPriceBps?: number;
 }
 
 type Side = "YES" | "NO";
@@ -17,7 +18,7 @@ const MIN_BURNER_GAS_BALANCE = parseEther("0.01");
 const BURNER_TX_GAS_LIMIT = 300000n;
 const BURNER_GAS_BUFFER = parseEther("0.002");
 
-export default function OrderForm({ marketId }: OrderFormProps) {
+export default function OrderForm({ marketId, marketYesPriceBps }: OrderFormProps) {
   const { address } = useAccount();
   const chainId = useChainId();
   const { data: walletClient } = useWalletClient();
@@ -37,6 +38,25 @@ export default function OrderForm({ marketId }: OrderFormProps) {
   const contractsReady =
     isConfiguredAddress(CONTRACTS.PRIVATE_MARKET) &&
     isConfiguredAddress(CONTRACTS.WMON);
+  const parsedAmount = Number.parseFloat(amount);
+  const parsedPrice = Number.parseFloat(price);
+  const hasValidAmount = Number.isFinite(parsedAmount) && parsedAmount > 0;
+  const hasValidPrice = Number.isFinite(parsedPrice) && parsedPrice > 0;
+  const marketSidePrice = marketYesPriceBps !== undefined
+    ? side === "YES"
+      ? marketYesPriceBps / 100
+      : (10000 - marketYesPriceBps) / 100
+    : null;
+  const marketPayout = hasValidAmount && marketSidePrice && marketSidePrice > 0
+    ? (parsedAmount / (marketSidePrice / 100)).toFixed(2)
+    : "—";
+  const orderPayout = hasValidAmount && hasValidPrice
+    ? (parsedAmount / (parsedPrice / 100)).toFixed(2)
+    : "0.00";
+  const marketReturn = marketSidePrice && marketSidePrice > 0
+    ? `${(100 / marketSidePrice).toFixed(1)}x`
+    : "—";
+  const orderReturn = hasValidPrice ? `${(100 / parsedPrice).toFixed(1)}x` : "—";
 
   const waitForHash = async (hash?: `0x${string}`) => {
     if (!hash || !publicClient) return;
@@ -517,17 +537,21 @@ export default function OrderForm({ marketId }: OrderFormProps) {
           <span className="font-mono text-white">{amount || "0"} MON</span>
         </div>
         <div className="flex justify-between text-white/40 mt-1">
-          <span>Potential payout</span>
+          <span>Potential payout (market)</span>
           <span className="font-mono text-white">
-            {price && amount
-              ? (parseFloat(amount) / (parseFloat(price) / 100)).toFixed(2)
-              : "0"} MON
+            {marketPayout === "—" ? "—" : `${marketPayout} MON`}
+          </span>
+        </div>
+        <div className="flex justify-between text-white/35 mt-1">
+          <span>Potential payout (order)</span>
+          <span className="font-mono text-white">
+            {orderPayout} MON
           </span>
         </div>
         <div className="flex justify-between text-white/30 mt-1">
-          <span>Return</span>
+          <span>Return (market / order)</span>
           <span className="font-mono">
-            {price ? `${(100 / parseFloat(price)).toFixed(1)}x` : "—"}
+            {marketReturn} / {orderReturn}
           </span>
         </div>
       </div>

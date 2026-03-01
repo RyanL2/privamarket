@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { useMarket, useBatchResult } from "@/hooks/usePrivateMarket";
@@ -18,11 +18,15 @@ export default function MarketPage() {
 
   const params = useParams();
   const marketId = Number(params.id);
-  const { data: market, isLoading } = useMarket(marketId);
+  const { data: market, isLoading, refetch: refetchMarket } = useMarket(marketId);
 
   // Get last few batch results
   const prevBatchId = market ? Math.max(0, Number(market.currentBatchId) - 1) : 0;
-  const { data: lastBatch } = useBatchResult(marketId, prevBatchId);
+  const { data: lastBatch, refetch: refetchLastBatch } = useBatchResult(marketId, prevBatchId);
+  const handleBatchCleared = useCallback(() => {
+    void refetchMarket();
+    void refetchLastBatch();
+  }, [refetchMarket, refetchLastBatch]);
 
   if (isLoading) {
     return (
@@ -144,7 +148,10 @@ export default function MarketPage() {
         {/* Order Form */}
         <div className="lg:col-span-1">
           {!isResolved ? (
-            <OrderForm marketId={marketId} />
+            <OrderForm
+              marketId={marketId}
+              marketYesPriceBps={lastBatch && lastBatch.clearingPrice > 0n ? Number(lastBatch.clearingPrice) : undefined}
+            />
           ) : (
             <div className="rounded-xl border border-white/10 bg-white/5 p-5 text-center text-white/40">
               Market resolved. Redeem winning tokens.
@@ -158,6 +165,7 @@ export default function MarketPage() {
             marketId={marketId}
             batchInterval={Number(market.batchInterval)}
             lastClearTime={Number(market.lastClearTime)}
+            onBatchCleared={handleBatchCleared}
           />
         </div>
 

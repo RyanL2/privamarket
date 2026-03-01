@@ -7,7 +7,19 @@ import type { MarketData } from "@/hooks/usePrivateMarket";
 
 const OUTCOME_LABELS = ["Unresolved", "YES", "NO"] as const;
 
-export default function MarketCard({ market }: { market: MarketData }) {
+interface BatchResultSummary {
+  clearingPrice: bigint;
+  yesVolume: bigint;
+  noVolume: bigint;
+  timestamp: bigint;
+}
+
+interface MarketCardProps {
+  market: MarketData;
+  previousBatch: BatchResultSummary | null;
+}
+
+export default function MarketCard({ market, previousBatch }: MarketCardProps) {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
@@ -16,6 +28,11 @@ export default function MarketCard({ market }: { market: MarketData }) {
   const daysLeft = mounted
     ? Math.max(0, Math.ceil((resolutionDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
     : 0;
+  const hasPreviousBatch = !!previousBatch && previousBatch.timestamp > 0n;
+  const previousYesPrice = hasPreviousBatch ? `${(Number(previousBatch.clearingPrice) / 100).toFixed(1)}%` : "—";
+  const previousVolume = hasPreviousBatch
+    ? `${Number(formatEther(previousBatch.yesVolume + previousBatch.noVolume)).toFixed(2)} MON`
+    : "—";
 
   return (
     <Link
@@ -54,6 +71,17 @@ export default function MarketCard({ market }: { market: MarketData }) {
           <div className="text-sm font-mono font-semibold text-white">
             {isResolved ? "Done" : mounted ? `${daysLeft}d` : "—"}
           </div>
+        </div>
+      </div>
+
+      <div className="mt-3 rounded-lg bg-white/5 p-2.5">
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-white/40">Prev YES</span>
+          <span className="font-mono text-white">{previousYesPrice}</span>
+        </div>
+        <div className="flex items-center justify-between text-xs mt-1">
+          <span className="text-white/40">Prev Volume</span>
+          <span className="font-mono text-white">{previousVolume}</span>
         </div>
       </div>
 

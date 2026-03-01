@@ -113,8 +113,13 @@ export function usePlaceOrder() {
 }
 
 export function useClearBatch() {
-  const { writeContract, data: hash } = useWriteContract();
-  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash });
+  const { writeContract, data: hash, error: writeError, isPending: isSubmitting } = useWriteContract();
+  const {
+    isLoading: isConfirming,
+    isSuccess,
+    isError: isReceiptError,
+    error: receiptError,
+  } = useWaitForTransactionReceipt({ hash });
 
   const clearBatch = (marketId: number) => {
     writeContract({
@@ -122,10 +127,12 @@ export function useClearBatch() {
       abi: PRIVATEMARKET_ABI,
       functionName: "clearBatch",
       args: [BigInt(marketId)],
+      gas: 5_000_000n,
     });
   };
 
-  return { clearBatch, hash, isConfirming, isSuccess };
+  const clearError = (receiptError ?? writeError) as Error | null;
+  return { clearBatch, hash, isSubmitting, isConfirming, isSuccess, isError: isReceiptError || !!writeError, clearError };
 }
 
 export function useCreateMarket() {

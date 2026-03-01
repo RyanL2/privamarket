@@ -1,23 +1,32 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { useMarketCount, useMarkets, useWMonBalance } from "@/hooks/usePrivateMarket";
-import { useAccount, useBalance } from "wagmi";
+import { useAccount, useBalance, useReadContracts } from "wagmi";
 import { formatEther } from "viem";
 import MarketCard from "@/components/MarketCard";
 import CreateMarket from "@/components/CreateMarket";
 import { CONTRACTS, isConfiguredAddress, monadTestnet } from "@/lib/config";
+import { PRIVATEMARKET_ABI } from "@/lib/contracts";
 
 const UnlinkWallet = dynamic(() => import("@/components/UnlinkWallet"), { ssr: false });
+
+interface BatchResultSummary {
+  clearingPrice: bigint;
+  yesVolume: bigint;
+  noVolume: bigint;
+  timestamp: bigint;
+}
 
 export default function HomePage() {
   const [mounted, setMounted] = useState(false);
   useEffect(() => setMounted(true), []);
 
   const { address } = useAccount();
-  const { data: count } = useMarketCount();
-  const { data: markets, isLoading } = useMarkets(Number(count ?? 0));
+  const { data: count, isLoading: isCountLoading } = useMarketCount();
+  const { data: markets, isLoading: isMarketsLoading } = useMarkets(Number(count ?? 0));
+  const marketsLoading = isCountLoading || (count !== undefined && isMarketsLoading);
   const { data: monBalance } = useBalance({
     address,
     chainId: monadTestnet.id,
@@ -25,6 +34,40 @@ export default function HomePage() {
   });
   const { data: wmonBalance } = useWMonBalance(address);
   const wmonConfigured = isConfiguredAddress(CONTRACTS.WMON);
+  const previousBatchContracts = useMemo(
+    () =>
+      (markets ?? []).map((m) => ({
+        address: CONTRACTS.PRIVATE_MARKET,
+        abi: PRIVATEMARKET_ABI,
+        functionName: "getBatchResult" as const,
+        args: [BigInt(m.id), m.currentBatchId > 0n ? m.currentBatchId - 1n : 0n] as const,
+      })),
+    [markets],
+  );
+  const { data: previousBatchData } = useReadContracts({
+    contracts: previousBatchContracts,
+    query: {
+      enabled: previousBatchContracts.length > 0,
+      staleTime: 15000,
+      refetchInterval: 15000,
+      refetchOnWindowFocus: false,
+    },
+  });
+  const previousBatchByMarket = useMemo(() => {
+    const mapped = new Map<number, BatchResultSummary | null>();
+
+    (markets ?? []).forEach((market, i) => {
+      const result = previousBatchData?.[i];
+      if (result?.status === "success" && result.result) {
+        const batch = result.result as unknown as BatchResultSummary;
+        mapped.set(market.id, batch.timestamp > 0n ? batch : null);
+      } else {
+        mapped.set(market.id, null);
+      }
+    });
+
+    return mapped;
+  }, [markets, previousBatchData]);
 
   return (
     <div className="space-y-8">
@@ -66,19 +109,21 @@ export default function HomePage() {
         <div className="lg:col-span-2 space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-xl font-semibold">Markets</h2>
-            <span className="text-sm text-white/40">{markets?.length ?? 0} active</span>
+            <span className="text-sm text-white/40">
+              {marketsLoading ? "Loading..." : `${markets?.length ?? 0} active`}
+            </span>
           </div>
 
-          {isLoading ? (
+          {marketsLoading ? (
             <div className="space-y-3">
-              {[1, 2].map((i) => (
-                <div key={i} className="rounded-xl border border-white/10 bg-white/5 p-5 h-32 animate-pulse" />
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="rounded-xl border border-white/10 bg-white/5 p-5 h-36 animate-pulse" />
               ))}
             </div>
           ) : markets && markets.length > 0 ? (
             <div className="space-y-3">
               {markets.map((m) => (
-                <MarketCard key={m.id} market={m} />
+                <MarketCard key={m.id} market={m} previousBatch={previousBatchByMarket.get(m.id) ?? null} />
               ))}
             </div>
           ) : (
