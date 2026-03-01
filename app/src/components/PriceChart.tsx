@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useMemo, useState } from "react";
 import { useReadContracts } from "wagmi";
 import { PRIVATEMARKET_ABI } from "@/lib/contracts";
 import { CONTRACTS } from "@/lib/config";
@@ -16,8 +17,15 @@ interface BatchResult {
   timestamp: bigint;
 }
 
+interface ChartPoint {
+  batchId: number;
+  price: number;
+  volume: number;
+  timestamp: number;
+}
+
 export default function PriceChart({ marketId, currentBatchId }: PriceChartProps) {
-  const batchCount = Math.min(currentBatchId, 20);
+  const batchCount = Math.min(currentBatchId, 12);
   const startBatch = Math.max(0, currentBatchId - batchCount);
 
   const contracts = Array.from({ length: batchCount }, (_, i) => ({
@@ -27,30 +35,52 @@ export default function PriceChart({ marketId, currentBatchId }: PriceChartProps
     args: [BigInt(marketId), BigInt(startBatch + i)] as const,
   }));
 
-  const { data: results } = useReadContracts({ contracts });
+  const { data: results } = useReadContracts({
+    contracts,
+    query: {
+      enabled: contracts.length > 0,
+      staleTime: 15000,
+      refetchInterval: 15000,
+      refetchOnWindowFocus: false,
+    },
+  });
 
-  const points: { batchId: number; price: number; volume: number; timestamp: number }[] = [];
+  const computedPoints = useMemo<ChartPoint[]>(() => {
+    const points: ChartPoint[] = [];
 
-  if (results) {
-    for (let i = 0; i < results.length; i++) {
-      const r = results[i];
-      if (r.status === "success" && r.result) {
-        const batch = r.result as unknown as BatchResult;
-        if (batch.timestamp > 0n && batch.clearingPrice > 0n) {
-          // Skip batches where all orders were refunded (single-sided, no real price discovery)
-          const totalVolume = Number(batch.yesVolume) + Number(batch.noVolume);
-          if (totalVolume > 0) {
-            points.push({
-              batchId: startBatch + i,
-              price: Number(batch.clearingPrice) / 100,
-              volume: totalVolume,
-              timestamp: Number(batch.timestamp),
-            });
+    if (results) {
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i];
+        if (r.status === "success" && r.result) {
+          const batch = r.result as unknown as BatchResult;
+          if (batch.timestamp > 0n && batch.clearingPrice > 0n) {
+            // Skip batches where all orders were refunded (single-sided, no real price discovery)
+            const totalVolume = Number(batch.yesVolume) + Number(batch.noVolume);
+            if (totalVolume > 0) {
+              points.push({
+                batchId: startBatch + i,
+                price: Number(batch.clearingPrice) / 100,
+                volume: totalVolume,
+                timestamp: Number(batch.timestamp),
+              });
+            }
           }
         }
       }
     }
-  }
+
+    return points;
+  }, [results, startBatch]);
+
+  const [cachedPoints, setCachedPoints] = useState<ChartPoint[]>([]);
+
+  useEffect(() => {
+    if (computedPoints.length > 0) {
+      setCachedPoints(computedPoints);
+    }
+  }, [computedPoints]);
+
+  const points = computedPoints.length > 0 ? computedPoints : cachedPoints;
 
   if (points.length === 0) {
     return (

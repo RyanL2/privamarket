@@ -40,7 +40,7 @@ export default function MarketCard({ market }: { market: MarketData }) {
           <div className="text-xs text-white/40 mb-0.5">Pool</div>
           <div className="text-sm font-mono font-semibold text-white">
             {Number(formatEther(market.collateralPool)).toFixed(2)}
-            <span className="text-xs text-white/40 ml-0.5">PUSD</span>
+            <span className="text-xs text-white/40 ml-0.5">MON</span>
           </div>
         </div>
         <div className="rounded-lg bg-white/5 p-2.5 text-center">

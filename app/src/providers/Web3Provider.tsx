@@ -1,10 +1,10 @@
 "use client";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { WagmiProvider, createConfig, http } from "wagmi";
+import { WagmiProvider, http } from "wagmi";
 import { RainbowKitProvider, getDefaultConfig, darkTheme } from "@rainbow-me/rainbowkit";
 import { UnlinkProvider } from "@unlink-xyz/react";
-import { monadTestnet } from "@/lib/config";
+import { monadTestnet, UNLINK_CHAIN } from "@/lib/config";
 import "@rainbow-me/rainbowkit/styles.css";
 
 const config = getDefaultConfig({
@@ -14,6 +14,7 @@ const config = getDefaultConfig({
   transports: {
     [monadTestnet.id]: http(monadTestnet.rpcUrls.default.http[0]),
   },
+  ssr: true,
 });
 
 const queryClient = new QueryClient();
@@ -23,7 +24,7 @@ export default function Web3Provider({ children }: { children: React.ReactNode }
     <WagmiProvider config={config}>
       <QueryClientProvider client={queryClient}>
         <RainbowKitProvider theme={darkTheme({ accentColor: "#7c3aed", accentColorForeground: "white", borderRadius: "medium" })}>
-          <UnlinkProvider chain="monad-testnet">
+          <UnlinkProvider chain={UNLINK_CHAIN} syncInterval={45000}>
             {children}
           </UnlinkProvider>
         </RainbowKitProvider>

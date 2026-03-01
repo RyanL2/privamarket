@@ -1,23 +1,24 @@
 "use client";
 
-import { useState } from "react";
-import { useAccount, useWalletClient } from "wagmi";
+import { useRef, useState } from "react";
+import { useAccount, useChainId, usePublicClient, useWalletClient } from "wagmi";
 import { useUnlink, useBurner } from "@unlink-xyz/react";
-import { CONTRACTS } from "@/lib/config";
-import { PRIVATEMARKET_ABI, PRIVAUSD_ABI } from "@/lib/contracts";
+import { CONTRACTS, isConfiguredAddress, monadTestnet } from "@/lib/config";
+import { PRIVATEMARKET_ABI, WMON_ABI } from "@/lib/contracts";
 import { parseEther, encodeFunctionData } from "viem";
 
 interface OrderFormProps {
   marketId: number;
-  question: string;
 }
 
 type Side = "YES" | "NO";
 
-export default function OrderForm({ marketId, question }: OrderFormProps) {
+export default function OrderForm({ marketId }: OrderFormProps) {
   const { address } = useAccount();
+  const chainId = useChainId();
   const { data: walletClient } = useWalletClient();
-  const { walletExists, ready } = useUnlink();
+  const publicClient = usePublicClient();
+  const { walletExists, ready, waitForConfirmation } = useUnlink();
   const { burners, createBurner, fund, send: burnerSend } = useBurner();
 
   const [side, setSide] = useState<Side>("YES");
@@ -26,9 +27,28 @@ export default function OrderForm({ marketId, question }: OrderFormProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [step, setStep] = useState("");
   const [usePrivacy, setUsePrivacy] = useState(true);
+  const submitLockRef = useRef(false);
+  const networkMismatch = chainId !== monadTestnet.id;
+  const contractsReady =
+    isConfiguredAddress(CONTRACTS.PRIVATE_MARKET) &&
+    isConfiguredAddress(CONTRACTS.WMON);
+
+  const waitForHash = async (hash?: `0x${string}`) => {
+    if (!hash || !publicClient) return;
+    await publicClient.waitForTransactionReceipt({ hash });
+  };
 
   const handleSubmit = async () => {
-    if (!address || !walletClient) return;
+    if (!address || !walletClient || submitLockRef.current) return;
+    if (networkMismatch) {
+      setStep("Switch to Monad Testnet to place orders.");
+      return;
+    }
+    if (!contractsReady) {
+      setStep("Missing contract config. Set NEXT_PUBLIC_PRIVATE_MARKET_ADDRESS and NEXT_PUBLIC_WMON_ADDRESS.");
+      return;
+    }
+    submitLockRef.current = true;
     setIsSubmitting(true);
 
     try {
@@ -49,21 +69,24 @@ export default function OrderForm({ marketId, question }: OrderFormProps) {
         }
 
         setStep("Funding burner from shielded pool...");
-        await fund.execute({
+        const fundResult = await fund.execute({
           index: burnerIndex,
-          params: { token: CONTRACTS.PRIVAUSD, amount: amountWei },
+          params: { token: CONTRACTS.WMON, amount: amountWei },
         });
+        setStep("Waiting for shielded transfer confirmation...");
+        await waitForConfirmation(fundResult.relayId, { timeout: 120000 });
 
-        setStep("Approving PrivaUSD...");
+        setStep("Approving WMON...");
         const approveData = encodeFunctionData({
-          abi: PRIVAUSD_ABI,
+          abi: WMON_ABI,
           functionName: "approve",
           args: [CONTRACTS.PRIVATE_MARKET, amountWei],
         });
-        await burnerSend.execute({
+        const approveTx = await burnerSend.execute({
           index: burnerIndex,
-          tx: { to: CONTRACTS.PRIVAUSD, data: approveData },
+          tx: { to: CONTRACTS.WMON, data: approveData },
         });
+        await waitForHash(approveTx.txHash as `0x${string}`);
 
         setStep("Placing private order...");
         const orderData = encodeFunctionData({
@@ -71,41 +94,78 @@ export default function OrderForm({ marketId, question }: OrderFormProps) {
           functionName: "placeOrder",
           args: [BigInt(marketId), side === "YES" ? 0 : 1, BigInt(priceInBps), amountWei],
         });
-        await burnerSend.execute({
+        const orderTx = await burnerSend.execute({
           index: burnerIndex,
           tx: { to: CONTRACTS.PRIVATE_MARKET, data: orderData },
         });
+        void orderTx;
 
-        setStep("Order placed privately!");
+        setStep("Private order submitted!");
       } else {
         // === Public order (fallback) ===
-        setStep("Approving PrivaUSD...");
-        await walletClient.writeContract({
-          address: CONTRACTS.PRIVAUSD,
-          abi: PRIVAUSD_ABI,
+        setStep("Wrapping MON to WMON...");
+        const wrapHash = await walletClient.writeContract({
+          address: CONTRACTS.WMON,
+          abi: WMON_ABI,
+          functionName: "deposit",
+          args: [],
+          value: amountWei,
+        });
+        await waitForHash(wrapHash);
+
+        setStep("Approving WMON...");
+        const approveHash = await walletClient.writeContract({
+          address: CONTRACTS.WMON,
+          abi: WMON_ABI,
           functionName: "approve",
           args: [CONTRACTS.PRIVATE_MARKET, amountWei],
         });
+        await waitForHash(approveHash);
 
         setStep("Placing order...");
-        await walletClient.writeContract({
+        const orderHash = await walletClient.writeContract({
           address: CONTRACTS.PRIVATE_MARKET,
           abi: PRIVATEMARKET_ABI,
           functionName: "placeOrder",
           args: [BigInt(marketId), side === "YES" ? 0 : 1, BigInt(priceInBps), amountWei],
         });
+        void orderHash;
 
-        setStep("Order placed!");
+        setStep("Order submitted!");
       }
-    } catch (e: any) {
-      console.error("Order failed:", e);
-      const msg = e.shortMessage || e.message || String(e);
-      if (msg.includes("404") || msg.includes("SERVER_ERROR")) {
-        setStep("Error: Unlink privacy service unavailable. Try a public order instead.");
+    } catch (error: unknown) {
+      console.error("Order failed:", error);
+      const msg =
+        error &&
+        typeof error === "object" &&
+        "shortMessage" in error &&
+        typeof (error as { shortMessage?: unknown }).shortMessage === "string"
+          ? (error as { shortMessage: string }).shortMessage
+          : error instanceof Error
+            ? error.message
+            : String(error);
+      const normalized = msg.toLowerCase();
+
+      if (
+        (normalized.includes("timeout") && normalized.includes("confirmation")) ||
+        normalized.includes("waitforconfirmation")
+      ) {
+        setUsePrivacy(false);
+        setStep("Private relay confirmation timed out. Check shielded WMON balance, then retry.");
+      } else if (
+        normalized.includes("404") ||
+        normalized.includes("server_error") ||
+        normalized.includes("http timeout")
+      ) {
+        setUsePrivacy(false);
+        setStep("Privacy service unavailable. Switched to public mode.");
+      } else if (normalized.includes("nonce too low")) {
+        setStep("Error: Nonce too low. Wait for pending tx confirmation, then retry.");
       } else {
         setStep(`Error: ${msg}`);
       }
     } finally {
+      submitLockRef.current = false;
       setIsSubmitting(false);
     }
   };
@@ -163,7 +223,7 @@ export default function OrderForm({ marketId, question }: OrderFormProps) {
 
       {/* Amount input */}
       <div>
-        <label className="block text-xs text-white/40 mb-1">Amount (PUSD)</label>
+        <label className="block text-xs text-white/40 mb-1">Amount (MON)</label>
         <input
           type="number"
           value={amount}
@@ -191,14 +251,14 @@ export default function OrderForm({ marketId, question }: OrderFormProps) {
       <div className="rounded-lg bg-white/5 p-3 text-xs">
         <div className="flex justify-between text-white/40">
           <span>Cost</span>
-          <span className="font-mono text-white">{amount || "0"} PUSD</span>
+          <span className="font-mono text-white">{amount || "0"} MON</span>
         </div>
         <div className="flex justify-between text-white/40 mt-1">
           <span>Potential payout</span>
           <span className="font-mono text-white">
             {price && amount
               ? (parseFloat(amount) / (parseFloat(price) / 100)).toFixed(2)
-              : "0"} PUSD
+              : "0"} MON
           </span>
         </div>
         <div className="flex justify-between text-white/30 mt-1">
@@ -212,7 +272,14 @@ export default function OrderForm({ marketId, question }: OrderFormProps) {
       {/* Submit */}
       <button
         onClick={handleSubmit}
-        disabled={isSubmitting || !address || !amount || parseFloat(amount) <= 0}
+        disabled={
+          isSubmitting ||
+          !address ||
+          !amount ||
+          parseFloat(amount) <= 0 ||
+          networkMismatch ||
+          !contractsReady
+        }
         className={`w-full rounded-lg py-3 text-sm font-semibold transition ${
           side === "YES"
             ? "bg-emerald-600 hover:bg-emerald-500 text-white"
@@ -226,6 +293,14 @@ export default function OrderForm({ marketId, question }: OrderFormProps) {
 
       {!address && (
         <p className="text-xs text-center text-white/30">Connect wallet to trade</p>
+      )}
+      {address && networkMismatch && (
+        <p className="text-xs text-center text-amber-400">Switch to Monad Testnet to trade.</p>
+      )}
+      {address && !contractsReady && (
+        <p className="text-xs text-center text-amber-400">
+          Missing contract config. Set market + WMON addresses in env.
+        </p>
       )}
 
       <p className="text-xs text-white/25 text-center">

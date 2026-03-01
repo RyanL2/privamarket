@@ -1,12 +1,15 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useMarketCount, useMarkets, useFaucet, usePrivaUSDBalance } from "@/hooks/usePrivateMarket";
-import { useAccount } from "wagmi";
+import dynamic from "next/dynamic";
+import { useMarketCount, useMarkets, useWMonBalance } from "@/hooks/usePrivateMarket";
+import { useAccount, useBalance } from "wagmi";
 import { formatEther } from "viem";
 import MarketCard from "@/components/MarketCard";
 import CreateMarket from "@/components/CreateMarket";
-import UnlinkWallet from "@/components/UnlinkWallet";
+import { CONTRACTS, isConfiguredAddress, monadTestnet } from "@/lib/config";
+
+const UnlinkWallet = dynamic(() => import("@/components/UnlinkWallet"), { ssr: false });
 
 export default function HomePage() {
   const [mounted, setMounted] = useState(false);
@@ -15,8 +18,13 @@ export default function HomePage() {
   const { address } = useAccount();
   const { data: count } = useMarketCount();
   const { data: markets, isLoading } = useMarkets(Number(count ?? 0));
-  const { data: pusdBalance } = usePrivaUSDBalance(address);
-  const { faucet, isConfirming: isFauceting } = useFaucet();
+  const { data: monBalance } = useBalance({
+    address,
+    chainId: monadTestnet.id,
+    query: { enabled: !!address },
+  });
+  const { data: wmonBalance } = useWMonBalance(address);
+  const wmonConfigured = isConfiguredAddress(CONTRACTS.WMON);
 
   return (
     <div className="space-y-8">
@@ -33,23 +41,23 @@ export default function HomePage() {
         </p>
       </div>
 
-      {/* Wallet Balance + Faucet */}
+      {/* Wallet Balances */}
       {mounted && address && (
-        <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-5 py-3">
+        <div className="rounded-xl border border-white/10 bg-white/5 px-5 py-3">
           <div className="text-sm text-white/50">
-            PrivaUSD Balance:{" "}
-            <span className="font-mono text-white font-semibold">
-              {mounted && pusdBalance ? Number(formatEther(pusdBalance)).toFixed(2) : "0"}
+            <span className="mr-4">
+              MON:{" "}
+              <span className="font-mono text-white font-semibold">
+                {monBalance ? Number(formatEther(monBalance.value)).toFixed(2) : "0"}
+              </span>
             </span>
-            <span className="text-white/40 ml-1">PUSD</span>
+            <span>
+              WMON:{" "}
+              <span className="font-mono text-white font-semibold">
+                {wmonConfigured && wmonBalance ? Number(formatEther(wmonBalance)).toFixed(2) : "—"}
+              </span>
+            </span>
           </div>
-          <button
-            onClick={() => faucet("1000")}
-            disabled={isFauceting}
-            className="rounded-lg bg-violet-600 hover:bg-violet-500 disabled:opacity-50 px-4 py-1.5 text-xs font-medium text-white transition"
-          >
-            {isFauceting ? "Minting..." : "Get 1,000 PUSD"}
-          </button>
         </div>
       )}
 

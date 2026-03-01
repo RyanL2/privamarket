@@ -2,14 +2,15 @@
 
 import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
+import dynamic from "next/dynamic";
 import { useMarket, useBatchResult } from "@/hooks/usePrivateMarket";
 import { formatEther } from "viem";
 import OrderForm from "@/components/OrderForm";
 import BatchTimer from "@/components/BatchTimer";
-import UnlinkWallet from "@/components/UnlinkWallet";
 import PriceChart from "@/components/PriceChart";
 
 const OUTCOME_LABELS = ["Unresolved", "YES", "NO"] as const;
+const UnlinkWallet = dynamic(() => import("@/components/UnlinkWallet"), { ssr: false });
 
 export default function MarketPage() {
   const [mounted, setMounted] = useState(false);
@@ -90,7 +91,7 @@ export default function MarketPage() {
         <div className="rounded-lg bg-white/5 p-3 text-center">
           <div className="text-xs text-white/40">Pool</div>
           <div className="text-sm font-mono font-semibold mt-1">
-            {Number(formatEther(market.collateralPool)).toFixed(2)} PUSD
+            {Number(formatEther(market.collateralPool)).toFixed(2)} MON
           </div>
         </div>
         <div className="rounded-lg bg-white/5 p-3 text-center">
@@ -129,11 +130,11 @@ export default function MarketPage() {
             </div>
             <div>
               <span className="text-white/40">YES Vol: </span>
-              <span className="font-mono">{Number(formatEther(lastBatch.yesVolume)).toFixed(2)} PUSD</span>
+              <span className="font-mono">{Number(formatEther(lastBatch.yesVolume)).toFixed(2)} MON</span>
             </div>
             <div>
               <span className="text-white/40">NO Vol: </span>
-              <span className="font-mono">{Number(formatEther(lastBatch.noVolume)).toFixed(2)} PUSD</span>
+              <span className="font-mono">{Number(formatEther(lastBatch.noVolume)).toFixed(2)} MON</span>
             </div>
           </div>
         </div>
@@ -143,7 +144,7 @@ export default function MarketPage() {
         {/* Order Form */}
         <div className="lg:col-span-1">
           {!isResolved ? (
-            <OrderForm marketId={marketId} question={market.question} />
+            <OrderForm marketId={marketId} />
           ) : (
             <div className="rounded-xl border border-white/10 bg-white/5 p-5 text-center text-white/40">
               Market resolved. Redeem winning tokens.

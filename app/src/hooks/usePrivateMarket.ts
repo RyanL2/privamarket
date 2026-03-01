@@ -1,9 +1,9 @@
 "use client";
 
 import { useReadContract, useReadContracts, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
-import { PRIVATEMARKET_ABI, PRIVAUSD_ABI } from "@/lib/contracts";
-import { CONTRACTS } from "@/lib/config";
-import { parseEther, formatEther } from "viem";
+import { PRIVATEMARKET_ABI, WMON_ABI } from "@/lib/contracts";
+import { CONTRACTS, isConfiguredAddress } from "@/lib/config";
+import { parseEther } from "viem";
 
 export interface MarketData {
   id: number;
@@ -144,44 +144,12 @@ export function useCreateMarket() {
   return { createMarket, hash, isConfirming, isSuccess };
 }
 
-export function useFaucet() {
-  const { writeContract, data: hash } = useWriteContract();
-  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash });
-
-  const faucet = (amount: string = "1000") => {
-    writeContract({
-      address: CONTRACTS.PRIVAUSD,
-      abi: PRIVAUSD_ABI,
-      functionName: "faucet",
-      args: [parseEther(amount)],
-    });
-  };
-
-  return { faucet, hash, isConfirming, isSuccess };
-}
-
-export function useApprovePrivaUSD() {
-  const { writeContract, data: hash } = useWriteContract();
-  const { isLoading: isConfirming, isSuccess } = useWaitForTransactionReceipt({ hash });
-
-  const approve = (amount: string) => {
-    writeContract({
-      address: CONTRACTS.PRIVAUSD,
-      abi: PRIVAUSD_ABI,
-      functionName: "approve",
-      args: [CONTRACTS.PRIVATE_MARKET, parseEther(amount)],
-    });
-  };
-
-  return { approve, hash, isConfirming, isSuccess };
-}
-
-export function usePrivaUSDBalance(address?: `0x${string}`) {
+export function useWMonBalance(address?: `0x${string}`) {
   return useReadContract({
-    address: CONTRACTS.PRIVAUSD,
-    abi: PRIVAUSD_ABI,
+    address: CONTRACTS.WMON,
+    abi: WMON_ABI,
     functionName: "balanceOf",
     args: address ? [address] : undefined,
-    query: { enabled: !!address },
+    query: { enabled: !!address && isConfiguredAddress(CONTRACTS.WMON) },
   });
 }

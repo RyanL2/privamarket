@@ -2,13 +2,14 @@
 
 import { useState } from "react";
 import { useUnlink, useUnlinkBalance, useBurner, useDeposit } from "@unlink-xyz/react";
-import { useAccount, useWalletClient } from "wagmi";
-import { CONTRACTS } from "@/lib/config";
-import { PRIVAUSD_ABI } from "@/lib/contracts";
-import { parseEther, formatEther, encodeFunctionData } from "viem";
+import { useAccount, useChainId, useWalletClient } from "wagmi";
+import { CONTRACTS, isConfiguredAddress, monadTestnet } from "@/lib/config";
+import { WMON_ABI } from "@/lib/contracts";
+import { parseEther, formatEther } from "viem";
 
 export default function UnlinkWallet() {
   const { address } = useAccount();
+  const chainId = useChainId();
   const { data: walletClient } = useWalletClient();
   const {
     walletExists,
@@ -17,25 +18,30 @@ export default function UnlinkWallet() {
     ready,
     busy,
     status,
+    syncError,
     error,
     clearError,
+    refresh,
   } = useUnlink();
 
-  const { balance: shieldedPusd } = useUnlinkBalance(CONTRACTS.PRIVAUSD);
+  const { balance: shieldedWmon } = useUnlinkBalance(CONTRACTS.WMON);
   const { deposit: doDeposit, isPending: isDepositing } = useDeposit();
   const { burners, createBurner } = useBurner();
 
-  const [mnemonic, setMnemonic] = useState("");
   const [showMnemonic, setShowMnemonic] = useState("");
   const [depositAmount, setDepositAmount] = useState("100");
   const [importInput, setImportInput] = useState("");
+  const [unlinkUnavailable, setUnlinkUnavailable] = useState(false);
+  const networkMismatch = chainId !== monadTestnet.id;
+  const contractsReady = isConfiguredAddress(CONTRACTS.WMON);
 
   const handleCreate = async () => {
     try {
       const result = await createWallet();
       setShowMnemonic(result.mnemonic);
-    } catch (e) {
-      console.error("Failed to create wallet:", e);
+      setUnlinkUnavailable(false);
+    } catch (error: unknown) {
+      console.error("Failed to create wallet:", error);
     }
   };
 
@@ -43,27 +49,38 @@ export default function UnlinkWallet() {
     if (!importInput.trim()) return;
     try {
       await importWallet(importInput.trim());
-    } catch (e) {
-      console.error("Failed to import wallet:", e);
+      setUnlinkUnavailable(false);
+    } catch (error: unknown) {
+      console.error("Failed to import wallet:", error);
     }
   };
 
   const handleDeposit = async () => {
-    if (!address || !walletClient) return;
+    if (!address || !walletClient || unlinkUnavailable || networkMismatch || !contractsReady) return;
     try {
       const amount = parseEther(depositAmount);
 
+      // Native MON UX: wrap MON into WMON before shielding.
+      await walletClient.writeContract({
+        address: CONTRACTS.WMON,
+        abi: WMON_ABI,
+        functionName: "deposit",
+        args: [],
+        value: amount,
+      });
+
       // Prepare deposit to get the target pool address
       const result = await doDeposit([
-        { token: CONTRACTS.PRIVAUSD, amount, depositor: address },
+        { token: CONTRACTS.WMON, amount, depositor: address },
       ]);
+      setUnlinkUnavailable(false);
 
       // Submit the relay transaction on-chain if needed
       if (result && "calldata" in result) {
-        // Approve the Unlink pool to spend PrivaUSD before depositing
+        // Approve the Unlink pool to spend WMON before depositing
         await walletClient.writeContract({
-          address: CONTRACTS.PRIVAUSD,
-          abi: PRIVAUSD_ABI,
+          address: CONTRACTS.WMON,
+          abi: WMON_ABI,
           functionName: "approve",
           args: [result.to as `0x${string}`, amount],
         });
@@ -75,22 +92,32 @@ export default function UnlinkWallet() {
           value: result.value ? BigInt(result.value) : 0n,
         });
       }
-    } catch (e: any) {
-      const msg = e?.message || String(e);
-      if (msg.includes("404") || msg.includes("SERVER_ERROR")) {
-        console.error("Unlink service unavailable:", e);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+      if (msg.includes("404") || msg.includes("server_error") || msg.includes("http timeout")) {
+        setUnlinkUnavailable(true);
+        console.error("Unlink service unavailable:", error);
       } else {
-        console.error("Deposit failed:", e);
+        console.error("Deposit failed:", error);
       }
     }
   };
 
   const handleCreateBurner = async () => {
+    if (unlinkUnavailable || networkMismatch || !contractsReady) return;
     try {
       const index = burners.length;
       await createBurner(index);
-    } catch (e) {
-      console.error("Burner creation failed:", e);
+    } catch (error: unknown) {
+      console.error("Burner creation failed:", error);
+    }
+  };
+
+  const handleRefresh = async () => {
+    try {
+      await refresh();
+    } catch (error: unknown) {
+      console.error("Refresh failed:", error);
     }
   };
 
@@ -107,13 +134,44 @@ export default function UnlinkWallet() {
     <div className="rounded-xl border border-white/10 bg-white/5 p-6 space-y-4">
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-semibold text-white">Privacy Wallet</h3>
-        {ready && <span className="h-2 w-2 rounded-full bg-emerald-400" />}
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleRefresh}
+            disabled={busy}
+            className="text-xs text-violet-400 hover:text-violet-300 disabled:opacity-50"
+          >
+            Refresh
+          </button>
+          {ready && <span className="h-2 w-2 rounded-full bg-emerald-400" />}
+        </div>
       </div>
 
       {error && (
         <div className="rounded-lg bg-red-500/10 border border-red-500/20 p-3 text-sm text-red-400 flex justify-between">
           <span>{error.message}</span>
           <button onClick={clearError} className="text-red-300 hover:text-white">&times;</button>
+        </div>
+      )}
+
+      {unlinkUnavailable && (
+        <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 p-3 text-sm text-amber-300">
+          Unlink API unavailable (404). Use public orders until service recovers.
+        </div>
+      )}
+      {networkMismatch && (
+        <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 p-3 text-sm text-amber-300">
+          Switch to Monad Testnet to shield and trade privately.
+        </div>
+      )}
+      {!contractsReady && (
+        <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 p-3 text-sm text-amber-300">
+          Missing WMON config. Set NEXT_PUBLIC_WMON_ADDRESS.
+        </div>
+      )}
+
+      {syncError && (
+        <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 p-3 text-sm text-amber-300">
+          Unlink sync timeout. Tap Refresh to retry wallet sync.
         </div>
       )}
 
@@ -129,7 +187,7 @@ export default function UnlinkWallet() {
           </p>
           <button
             onClick={handleCreate}
-            disabled={busy}
+            disabled={busy || unlinkUnavailable}
             className="w-full rounded-lg bg-violet-600 hover:bg-violet-500 disabled:bg-violet-800 disabled:opacity-50 py-2.5 text-sm font-medium text-white transition"
           >
             Create Privacy Wallet
@@ -150,7 +208,7 @@ export default function UnlinkWallet() {
             />
             <button
               onClick={handleImport}
-              disabled={busy || !importInput.trim()}
+              disabled={busy || !importInput.trim() || unlinkUnavailable}
               className="rounded-lg bg-white/10 hover:bg-white/20 disabled:opacity-50 px-4 py-2 text-sm text-white transition"
             >
               Import
@@ -179,10 +237,10 @@ export default function UnlinkWallet() {
 
           {/* Shielded Balance */}
           <div className="rounded-lg bg-white/5 p-3">
-            <div className="text-xs text-white/40 mb-1">Shielded PrivaUSD</div>
+            <div className="text-xs text-white/40 mb-1">Shielded WMON</div>
             <div className="text-2xl font-bold text-white font-mono">
-              {formatEther(shieldedPusd ?? 0n)}
-              <span className="text-sm text-white/40 ml-1">PUSD</span>
+              {formatEther(shieldedWmon ?? 0n)}
+              <span className="text-sm text-white/40 ml-1">WMON</span>
             </div>
           </div>
 
@@ -192,15 +250,15 @@ export default function UnlinkWallet() {
               type="number"
               value={depositAmount}
               onChange={(e) => setDepositAmount(e.target.value)}
-              placeholder="Amount"
+              placeholder="Amount (MON)"
               className="flex-1 rounded-lg bg-white/5 border border-white/10 px-3 py-2 text-sm text-white placeholder:text-white/30 focus:outline-none focus:border-violet-500"
             />
             <button
               onClick={handleDeposit}
-              disabled={busy || isDepositing}
+              disabled={busy || isDepositing || unlinkUnavailable || networkMismatch || !contractsReady}
               className="rounded-lg bg-violet-600 hover:bg-violet-500 disabled:opacity-50 px-4 py-2 text-sm font-medium text-white transition"
             >
-              {isDepositing ? "Shielding..." : "Shield"}
+              {isDepositing ? "Shielding..." : "Shield MON"}
             </button>
           </div>
 
@@ -210,7 +268,7 @@ export default function UnlinkWallet() {
               <span className="text-sm text-white/60">Burner Accounts</span>
               <button
                 onClick={handleCreateBurner}
-                disabled={busy}
+                disabled={busy || unlinkUnavailable || networkMismatch || !contractsReady}
                 className="text-xs text-violet-400 hover:text-violet-300"
               >
                 + New Burner

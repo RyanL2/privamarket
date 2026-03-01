@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {Test, console} from "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 import {PrivateMarket} from "../src/PrivateMarket.sol";
-import {PrivaUSD} from "../src/PrivaUSD.sol";
+import {MockWMON} from "../src/mocks/MockWMON.sol";
 import {OutcomeToken} from "../src/OutcomeToken.sol";
 
 contract PrivateMarketTest is Test {
     PrivateMarket public market;
-    PrivaUSD public privaUSD;
+    MockWMON public wmon;
 
     address admin = address(this);
     address alice = makeAddr("alice");
@@ -16,18 +16,21 @@ contract PrivateMarketTest is Test {
     address charlie = makeAddr("charlie");
 
     function setUp() public {
-        privaUSD = new PrivaUSD();
-        market = new PrivateMarket(address(privaUSD));
+        wmon = new MockWMON();
+        market = new PrivateMarket(address(wmon));
 
-        // Fund test accounts with PrivaUSD
+        // Fund test accounts with WMON
+        vm.deal(alice, 10_000 ether);
         vm.prank(alice);
-        privaUSD.faucet(10_000 ether);
+        wmon.deposit{value: 10_000 ether}();
 
+        vm.deal(bob, 10_000 ether);
         vm.prank(bob);
-        privaUSD.faucet(10_000 ether);
+        wmon.deposit{value: 10_000 ether}();
 
+        vm.deal(charlie, 10_000 ether);
         vm.prank(charlie);
-        privaUSD.faucet(10_000 ether);
+        wmon.deposit{value: 10_000 ether}();
     }
 
     // ─── Market Creation ───────────────────────────────────
@@ -44,8 +47,7 @@ contract PrivateMarketTest is Test {
             address creator,
             PrivateMarket.Outcome resolved,
             uint256 currentBatchId,
-            uint256 batchInterval,
-            ,
+            uint256 batchInterval,,
         ) = market.getMarket(0);
 
         assertEq(question, "Test question?");
@@ -70,7 +72,7 @@ contract PrivateMarketTest is Test {
         market.createMarket("Test?", block.timestamp + 1 days, 5);
 
         vm.startPrank(alice);
-        privaUSD.approve(address(market), 100 ether);
+        wmon.approve(address(market), 100 ether);
         market.placeOrder(0, PrivateMarket.Side.YES, 6000, 100 ether);
         vm.stopPrank();
 
@@ -87,7 +89,7 @@ contract PrivateMarketTest is Test {
         market.createMarket("Test?", block.timestamp + 1 days, 5);
 
         vm.startPrank(alice);
-        privaUSD.approve(address(market), 100 ether);
+        wmon.approve(address(market), 100 ether);
         vm.expectRevert(PrivateMarket.InvalidPrice.selector);
         market.placeOrder(0, PrivateMarket.Side.YES, 0, 100 ether);
         vm.stopPrank();
@@ -97,7 +99,7 @@ contract PrivateMarketTest is Test {
         market.createMarket("Test?", block.timestamp + 1 days, 5);
 
         vm.startPrank(alice);
-        privaUSD.approve(address(market), 100 ether);
+        wmon.approve(address(market), 100 ether);
         vm.expectRevert(PrivateMarket.ZeroAmount.selector);
         market.placeOrder(0, PrivateMarket.Side.YES, 5000, 0);
         vm.stopPrank();
@@ -110,13 +112,13 @@ contract PrivateMarketTest is Test {
 
         // Alice bids YES at 60%
         vm.startPrank(alice);
-        privaUSD.approve(address(market), 1000 ether);
+        wmon.approve(address(market), 1000 ether);
         market.placeOrder(0, PrivateMarket.Side.YES, 6000, 1000 ether);
         vm.stopPrank();
 
         // Bob bids NO at 50% (which means he thinks YES <= 50%)
         vm.startPrank(bob);
-        privaUSD.approve(address(market), 500 ether);
+        wmon.approve(address(market), 500 ether);
         market.placeOrder(0, PrivateMarket.Side.NO, 5000, 500 ether);
         vm.stopPrank();
 
@@ -132,7 +134,7 @@ contract PrivateMarketTest is Test {
         assertTrue(result.timestamp > 0);
 
         // Check tokens were minted
-        (, , address yesToken, address noToken, , , , , ,) = market.getMarket(0);
+        (,, address yesToken, address noToken,,,,,,) = market.getMarket(0);
         assertTrue(OutcomeToken(yesToken).totalSupply() > 0 || OutcomeToken(noToken).totalSupply() > 0);
     }
 
@@ -141,17 +143,17 @@ contract PrivateMarketTest is Test {
 
         // Only YES orders, no NO orders
         vm.startPrank(alice);
-        privaUSD.approve(address(market), 100 ether);
+        wmon.approve(address(market), 100 ether);
         market.placeOrder(0, PrivateMarket.Side.YES, 6000, 100 ether);
         vm.stopPrank();
 
-        uint256 balanceBefore = privaUSD.balanceOf(alice);
+        uint256 balanceBefore = wmon.balanceOf(alice);
 
         vm.warp(block.timestamp + 6);
         market.clearBatch(0);
 
         // Alice should NOT be refunded — order carries to next batch
-        uint256 balanceAfter = privaUSD.balanceOf(alice);
+        uint256 balanceAfter = wmon.balanceOf(alice);
         assertEq(balanceAfter, balanceBefore);
 
         // Order should exist in batch 1 (next batch)
@@ -166,17 +168,17 @@ contract PrivateMarketTest is Test {
         market.createMarket("Test?", block.timestamp + 1 days, 5);
 
         vm.startPrank(alice);
-        privaUSD.approve(address(market), 100 ether);
+        wmon.approve(address(market), 100 ether);
         market.placeOrder(0, PrivateMarket.Side.YES, 6000, 100 ether);
         vm.stopPrank();
 
-        uint256 balanceBefore = privaUSD.balanceOf(alice);
+        uint256 balanceBefore = wmon.balanceOf(alice);
 
         // Alice cancels her order
         vm.prank(alice);
         market.cancelOrder(0, 0, 0);
 
-        uint256 balanceAfter = privaUSD.balanceOf(alice);
+        uint256 balanceAfter = wmon.balanceOf(alice);
         assertEq(balanceAfter - balanceBefore, 100 ether);
     }
 
@@ -184,7 +186,7 @@ contract PrivateMarketTest is Test {
         market.createMarket("Test?", block.timestamp + 1 days, 5);
 
         vm.startPrank(alice);
-        privaUSD.approve(address(market), 100 ether);
+        wmon.approve(address(market), 100 ether);
         market.placeOrder(0, PrivateMarket.Side.YES, 6000, 100 ether);
         vm.stopPrank();
 
@@ -206,7 +208,7 @@ contract PrivateMarketTest is Test {
         market.createMarket("Test?", block.timestamp + 1 days, 5);
         market.resolve(0, PrivateMarket.Outcome.YES);
 
-        (, , , , , PrivateMarket.Outcome resolved, , , ,) = market.getMarket(0);
+        (,,,,, PrivateMarket.Outcome resolved,,,,) = market.getMarket(0);
         assertEq(uint8(resolved), uint8(PrivateMarket.Outcome.YES));
     }
 
@@ -223,12 +225,12 @@ contract PrivateMarketTest is Test {
 
         // Place matching orders
         vm.startPrank(alice);
-        privaUSD.approve(address(market), 1000 ether);
+        wmon.approve(address(market), 1000 ether);
         market.placeOrder(0, PrivateMarket.Side.YES, 6000, 1000 ether);
         vm.stopPrank();
 
         vm.startPrank(bob);
-        privaUSD.approve(address(market), 500 ether);
+        wmon.approve(address(market), 500 ether);
         market.placeOrder(0, PrivateMarket.Side.NO, 5000, 500 ether);
         vm.stopPrank();
 
@@ -239,18 +241,18 @@ contract PrivateMarketTest is Test {
         market.resolve(0, PrivateMarket.Outcome.YES);
 
         // Alice redeems YES tokens
-        (, , address yesToken, , , , , , ,) = market.getMarket(0);
+        (,, address yesToken,,,,,,,) = market.getMarket(0);
         uint256 aliceYesBalance = OutcomeToken(yesToken).balanceOf(alice);
 
         if (aliceYesBalance > 0) {
-            uint256 privaUsdBefore = privaUSD.balanceOf(alice);
+            uint256 wmonBefore = wmon.balanceOf(alice);
 
             vm.startPrank(alice);
             market.redeem(0, aliceYesBalance);
             vm.stopPrank();
 
-            uint256 privaUsdAfter = privaUSD.balanceOf(alice);
-            assertTrue(privaUsdAfter > privaUsdBefore);
+            uint256 wmonAfter = wmon.balanceOf(alice);
+            assertTrue(wmonAfter > wmonBefore);
         }
     }
 
@@ -262,25 +264,28 @@ contract PrivateMarketTest is Test {
         market.redeem(0, 100 ether);
     }
 
-    // ─── PrivaUSD Faucet ───────────────────────────────────
+    // ─── WMON Wrap/Unwrap ─────────────────────────────────
 
-    function test_faucet() public {
+    function test_wmonWithdraw() public {
+        uint256 monBefore = alice.balance;
         vm.prank(alice);
-        privaUSD.faucet(1000 ether);
-        assertEq(privaUSD.balanceOf(alice), 11_000 ether); // 10k from setUp + 1k
+        wmon.withdraw(1000 ether);
+        assertEq(wmon.balanceOf(alice), 9000 ether);
+        assertEq(alice.balance, monBefore + 1000 ether);
     }
 
-    function test_faucet_revertsOnTooLargeAmount() public {
+    function test_wmonDeposit() public {
+        vm.deal(alice, 1 ether);
         vm.prank(alice);
-        vm.expectRevert(PrivaUSD.FaucetAmountTooLarge.selector);
-        privaUSD.faucet(10_001 ether);
+        wmon.deposit{value: 1 ether}();
+        assertEq(wmon.balanceOf(alice), 10_001 ether);
     }
 
     // ─── OutcomeToken Access Control ───────────────────────
 
     function test_outcomeToken_onlyMarketCanMint() public {
         market.createMarket("Test?", block.timestamp + 1 days, 5);
-        (, , address yesToken, , , , , , ,) = market.getMarket(0);
+        (,, address yesToken,,,,,,,) = market.getMarket(0);
 
         vm.prank(alice);
         vm.expectRevert(OutcomeToken.OnlyMarket.selector);
@@ -289,7 +294,7 @@ contract PrivateMarketTest is Test {
 
     function test_outcomeToken_onlyMarketCanBurn() public {
         market.createMarket("Test?", block.timestamp + 1 days, 5);
-        (, , address yesToken, , , , , , ,) = market.getMarket(0);
+        (,, address yesToken,,,,,,,) = market.getMarket(0);
 
         vm.prank(alice);
         vm.expectRevert(OutcomeToken.OnlyMarket.selector);

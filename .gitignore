@@ -8,3 +8,10 @@ cache/
 contracts/out/
 contracts/cache/
 SPEC.md
+
+# Ignore Forge broadcast artifacts
+contracts/broadcast/
+
+# Ignore generated or vendored mocks
+contracts/src/mocks/
+

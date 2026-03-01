@@ -3,22 +3,23 @@ pragma solidity ^0.8.24;
 
 import {Script, console} from "forge-std/Script.sol";
 import {PrivateMarket} from "../src/PrivateMarket.sol";
-import {PrivaUSD} from "../src/PrivaUSD.sol";
 import {IIdentityRegistry} from "../src/interfaces/IERC8004.sol";
 
 contract DeployScript is Script {
     address constant IDENTITY_REGISTRY = 0x8004A169FB4a3325136EB29fA0ceB6D2e539a432;
+    error MissingWMONAddress();
 
     function run() external {
         uint256 deployerKey = vm.envUint("PRIVATE_KEY");
         vm.startBroadcast(deployerKey);
 
-        // 1. Deploy PrivaUSD collateral token
-        PrivaUSD privaUSD = new PrivaUSD();
-        console.log("PrivaUSD deployed:", address(privaUSD));
+        // 1. Resolve WMON collateral token
+        address wmon = vm.envAddress("WMON_ADDRESS");
+        if (wmon == address(0)) revert MissingWMONAddress();
+        console.log("WMON:", wmon);
 
-        // 2. Deploy PrivateMarket with collateral token
-        PrivateMarket market = new PrivateMarket(address(privaUSD));
+        // 2. Deploy PrivateMarket with WMON collateral
+        PrivateMarket market = new PrivateMarket(wmon);
         console.log("PrivateMarket deployed:", address(market));
 
         // 3. Register as ERC-8004 agent (best-effort, skip if registry not deployed)
@@ -40,11 +41,7 @@ contract DeployScript is Script {
         );
         console.log("Demo market 0 created");
 
-        market.createMarket(
-            "Will ETH be above $5000 by end of 2026?",
-            block.timestamp + 180 days,
-            5
-        );
+        market.createMarket("Will ETH be above $5000 by end of 2026?", block.timestamp + 180 days, 5);
         console.log("Demo market 1 created");
 
         vm.stopBroadcast();
