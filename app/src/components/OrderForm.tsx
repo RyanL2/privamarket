@@ -2,24 +2,29 @@
 
 import { useRef, useState } from "react";
 import { useAccount, useChainId, usePublicClient, useWalletClient } from "wagmi";
-import { useUnlink, useBurner } from "@unlink-xyz/react";
+import { useUnlink, useBurner, useDeposit } from "@unlink-xyz/react";
 import { CONTRACTS, isConfiguredAddress, monadTestnet } from "@/lib/config";
 import { PRIVATEMARKET_ABI, WMON_ABI } from "@/lib/contracts";
-import { parseEther, encodeFunctionData } from "viem";
+import { parseEther, encodeFunctionData, createWalletClient, http, maxUint256 } from "viem";
+import { privateKeyToAccount } from "viem/accounts";
 
 interface OrderFormProps {
   marketId: number;
 }
 
 type Side = "YES" | "NO";
+const MIN_BURNER_GAS_BALANCE = parseEther("0.01");
+const BURNER_TX_GAS_LIMIT = 300000n;
+const BURNER_GAS_BUFFER = parseEther("0.002");
 
 export default function OrderForm({ marketId }: OrderFormProps) {
   const { address } = useAccount();
   const chainId = useChainId();
   const { data: walletClient } = useWalletClient();
   const publicClient = usePublicClient();
-  const { walletExists, ready, waitForConfirmation } = useUnlink();
-  const { burners, createBurner, fund, send: burnerSend } = useBurner();
+  const { unlink, walletExists, ready, getTxStatus, refresh } = useUnlink();
+  const { burners, createBurner, fund } = useBurner();
+  const { deposit: shieldDeposit } = useDeposit();
 
   const [side, setSide] = useState<Side>("YES");
   const [price, setPrice] = useState("50");
@@ -35,7 +40,236 @@ export default function OrderForm({ marketId }: OrderFormProps) {
 
   const waitForHash = async (hash?: `0x${string}`) => {
     if (!hash || !publicClient) return;
-    await publicClient.waitForTransactionReceipt({ hash });
+    const receipt = await publicClient.waitForTransactionReceipt({ hash });
+    if (receipt.status !== "success") {
+      throw new Error(`Transaction reverted: ${hash}`);
+    }
+  };
+
+  const waitForRelay = async (relayId: string, timeoutMs = 120000) => {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      try {
+        const status = await getTxStatus(relayId);
+        if (status.state === "succeeded") return;
+        if (status.state === "failed" || status.state === "reverted" || status.state === "dead") {
+          throw new Error(status.error ?? `Relay ${relayId} failed with state ${status.state}`);
+        }
+      } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+        if (!msg.includes("404")) {
+          throw error;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+    return false;
+  };
+
+  const sendBurnerTx = async (index: number, to: `0x${string}`, data: `0x${string}`) => {
+    if (!unlink) throw new Error("Privacy wallet not initialized.");
+    const burnerPrivateKey = await unlink.burner.exportKey(index);
+    const burnerClient = createWalletClient({
+      account: privateKeyToAccount(burnerPrivateKey as `0x${string}`),
+      chain: monadTestnet,
+      transport: http(monadTestnet.rpcUrls.default.http[0]),
+    });
+    const fees = await publicClient?.estimateFeesPerGas().catch(() => null);
+    const txParams = fees?.maxFeePerGas
+      ? {
+          maxFeePerGas: fees.maxFeePerGas,
+          maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
+        }
+      : fees?.gasPrice
+        ? { gasPrice: fees.gasPrice }
+        : {};
+    const hash = await burnerClient.sendTransaction({
+      to,
+      data,
+      gas: BURNER_TX_GAS_LIMIT,
+      ...txParams,
+    });
+    await waitForHash(hash);
+    return hash;
+  };
+
+  const ensureShieldedWmon = async (requiredAmount: bigint) => {
+    if (!unlink || !address || !walletClient || !publicClient) {
+      throw new Error("Privacy wallet not initialized.");
+    }
+
+    let shieldedBalance = await unlink.getBalance(CONTRACTS.WMON);
+    if (shieldedBalance >= requiredAmount) return;
+
+    const shortfall = requiredAmount - shieldedBalance;
+    const walletBalance = await publicClient.getBalance({ address });
+    if (walletBalance < shortfall) {
+      throw new Error("Insufficient MON to auto-shield required WMON for this private order.");
+    }
+
+    setStep("Shielded WMON low. Auto-shielding MON...");
+    const wrapHash = await walletClient.writeContract({
+      address: CONTRACTS.WMON,
+      abi: WMON_ABI,
+      functionName: "deposit",
+      args: [],
+      value: shortfall,
+    });
+    await waitForHash(wrapHash);
+
+    const depositResult = await shieldDeposit([
+      { token: CONTRACTS.WMON, amount: shortfall, depositor: address },
+    ]);
+
+    const approveHash = await walletClient.writeContract({
+      address: CONTRACTS.WMON,
+      abi: WMON_ABI,
+      functionName: "approve",
+      args: [depositResult.to as `0x${string}`, shortfall],
+    });
+    await waitForHash(approveHash);
+
+    const shieldHash = await walletClient.sendTransaction({
+      to: depositResult.to as `0x${string}`,
+      data: depositResult.calldata as `0x${string}`,
+      value: depositResult.value,
+    });
+    await waitForHash(shieldHash);
+
+    setStep("Waiting for shielded top-up confirmation...");
+    await waitForRelay(depositResult.relayId);
+    await refresh();
+
+    shieldedBalance = await unlink.getBalance(CONTRACTS.WMON);
+    if (shieldedBalance < requiredAmount) {
+      throw new Error("Insufficient shielded WMON balance for this private order.");
+    }
+  };
+
+  const ensureBurnerGas = async (burnerAddress: `0x${string}`, txCount: number) => {
+    if (!address || !walletClient || !publicClient) {
+      throw new Error("Wallet not initialized.");
+    }
+
+    const fees = await publicClient.estimateFeesPerGas().catch(() => null);
+    const feePerGas = fees?.maxFeePerGas ?? fees?.gasPrice;
+    const txCountBigInt = BigInt(Math.max(txCount, 1));
+    const requiredBalance =
+      feePerGas && feePerGas > 0n
+        ? ((feePerGas * BURNER_TX_GAS_LIMIT * txCountBigInt * 12n) / 10n) + BURNER_GAS_BUFFER
+        : MIN_BURNER_GAS_BALANCE * txCountBigInt;
+
+    const burnerBalance = await publicClient.getBalance({ address: burnerAddress });
+    if (burnerBalance >= requiredBalance) return;
+
+    const topUpAmount = requiredBalance - burnerBalance;
+    const walletBalance = await publicClient.getBalance({ address });
+    if (walletBalance < topUpAmount) {
+      throw new Error("Insufficient MON to top up burner gas for private order.");
+    }
+
+    setStep("Topping up burner MON for gas...");
+    const topUpHash = await walletClient.sendTransaction({
+      to: burnerAddress,
+      value: topUpAmount,
+    });
+    await waitForHash(topUpHash);
+  };
+
+  const getBurnerAllowance = async (burnerAddress: `0x${string}`) => {
+    if (!publicClient) throw new Error("Public client not initialized.");
+    return publicClient.readContract({
+      address: CONTRACTS.WMON,
+      abi: WMON_ABI,
+      functionName: "allowance",
+      args: [burnerAddress, CONTRACTS.PRIVATE_MARKET],
+    });
+  };
+
+  const ensureBurnerWmon = async (burnerAddress: `0x${string}`, requiredAmount: bigint) => {
+    if (!address || !walletClient || !publicClient) {
+      throw new Error("Wallet not initialized.");
+    }
+
+    const burnerBalance = await publicClient.readContract({
+      address: CONTRACTS.WMON,
+      abi: WMON_ABI,
+      functionName: "balanceOf",
+      args: [burnerAddress],
+    });
+    if (burnerBalance >= requiredAmount) return;
+
+    const deficit = requiredAmount - burnerBalance;
+    const walletWmon = await publicClient.readContract({
+      address: CONTRACTS.WMON,
+      abi: WMON_ABI,
+      functionName: "balanceOf",
+      args: [address],
+    });
+
+    if (walletWmon < deficit) {
+      const wrapNeeded = deficit - walletWmon;
+      const walletMon = await publicClient.getBalance({ address });
+      if (walletMon < wrapNeeded) {
+        throw new Error("Insufficient MON to top up burner WMON for private order.");
+      }
+
+      setStep("Wrapping MON to WMON for burner top-up...");
+      const wrapHash = await walletClient.writeContract({
+        address: CONTRACTS.WMON,
+        abi: WMON_ABI,
+        functionName: "deposit",
+        args: [],
+        value: wrapNeeded,
+      });
+      await waitForHash(wrapHash);
+    }
+
+    setStep("Topping up burner WMON...");
+    const transferHash = await walletClient.writeContract({
+      address: CONTRACTS.WMON,
+      abi: WMON_ABI,
+      functionName: "transfer",
+      args: [burnerAddress, deficit],
+    });
+    await waitForHash(transferHash);
+  };
+
+  const ensureBurnerAllowance = async (
+    burnerIndex: number,
+    burnerAddress: `0x${string}`,
+    requiredAmount: bigint
+  ) => {
+    if (!publicClient) {
+      throw new Error("Public client not initialized.");
+    }
+
+    let allowance = await publicClient.readContract({
+      address: CONTRACTS.WMON,
+      abi: WMON_ABI,
+      functionName: "allowance",
+      args: [burnerAddress, CONTRACTS.PRIVATE_MARKET],
+    });
+
+    if (allowance >= requiredAmount) return;
+
+    setStep("Approving WMON...");
+    const approveData = encodeFunctionData({
+      abi: WMON_ABI,
+      functionName: "approve",
+      args: [CONTRACTS.PRIVATE_MARKET, maxUint256],
+    });
+    await sendBurnerTx(burnerIndex, CONTRACTS.WMON, approveData);
+
+    allowance = await publicClient.readContract({
+      address: CONTRACTS.WMON,
+      abi: WMON_ABI,
+      functionName: "allowance",
+      args: [burnerAddress, CONTRACTS.PRIVATE_MARKET],
+    });
+    if (allowance < requiredAmount) {
+      throw new Error("Failed to set burner WMON allowance for private order.");
+    }
   };
 
   const handleSubmit = async () => {
@@ -58,35 +292,63 @@ export default function OrderForm({ marketId }: OrderFormProps) {
       if (usePrivacy && walletExists && ready) {
         // === Private order via burner ===
         let burnerIndex: number;
+        let burnerAddress: `0x${string}`;
         if (burners.length > 0) {
           // Reuse the latest burner account
           burnerIndex = burners.length - 1;
+          burnerAddress = burners[burnerIndex].address as `0x${string}`;
           setStep("Using burner account...");
         } else {
           setStep("Creating burner account...");
           burnerIndex = 0;
-          await createBurner(burnerIndex);
+          const burner = await createBurner(burnerIndex);
+          burnerAddress = burner.address as `0x${string}`;
         }
 
-        setStep("Funding burner from shielded pool...");
-        const fundResult = await fund.execute({
-          index: burnerIndex,
-          params: { token: CONTRACTS.WMON, amount: amountWei },
-        });
-        setStep("Waiting for shielded transfer confirmation...");
-        await waitForConfirmation(fundResult.relayId, { timeout: 120000 });
+        setStep("Checking shielded WMON balance...");
+        try {
+          await ensureShieldedWmon(amountWei);
+        } catch (error: unknown) {
+          const msg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+          if (
+            msg.includes("404") ||
+            msg.includes("timeout") ||
+            msg.includes("pending") ||
+            msg.includes("server_error")
+          ) {
+            setStep("Shielded relay delayed. Using direct burner funding...");
+          } else {
+            throw error;
+          }
+        }
+        try {
+          setStep("Funding burner from shielded pool...");
+          const fundResult = await fund.execute({
+            index: burnerIndex,
+            params: { token: CONTRACTS.WMON, amount: amountWei },
+          });
+          setStep("Waiting for shielded transfer confirmation...");
+          const confirmed = await waitForRelay(fundResult.relayId);
+          if (!confirmed) {
+            setStep("Shielded transfer pending. Using direct burner top-up...");
+          }
+        } catch (error: unknown) {
+          const msg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+          if (
+            msg.includes("404") ||
+            msg.includes("timeout") ||
+            msg.includes("server_error")
+          ) {
+            setStep("Shielded transfer unavailable. Using direct burner top-up...");
+          } else {
+            throw error;
+          }
+        }
 
-        setStep("Approving WMON...");
-        const approveData = encodeFunctionData({
-          abi: WMON_ABI,
-          functionName: "approve",
-          args: [CONTRACTS.PRIVATE_MARKET, amountWei],
-        });
-        const approveTx = await burnerSend.execute({
-          index: burnerIndex,
-          tx: { to: CONTRACTS.WMON, data: approveData },
-        });
-        await waitForHash(approveTx.txHash as `0x${string}`);
+        await ensureBurnerWmon(burnerAddress, amountWei);
+        const currentAllowance = await getBurnerAllowance(burnerAddress);
+        await ensureBurnerGas(burnerAddress, currentAllowance >= amountWei ? 1 : 2);
+        await ensureBurnerAllowance(burnerIndex, burnerAddress, amountWei);
 
         setStep("Placing private order...");
         const orderData = encodeFunctionData({
@@ -94,11 +356,7 @@ export default function OrderForm({ marketId }: OrderFormProps) {
           functionName: "placeOrder",
           args: [BigInt(marketId), side === "YES" ? 0 : 1, BigInt(priceInBps), amountWei],
         });
-        const orderTx = await burnerSend.execute({
-          index: burnerIndex,
-          tx: { to: CONTRACTS.PRIVATE_MARKET, data: orderData },
-        });
-        void orderTx;
+        await sendBurnerTx(burnerIndex, CONTRACTS.PRIVATE_MARKET, orderData);
 
         setStep("Private order submitted!");
       } else {
@@ -161,6 +419,11 @@ export default function OrderForm({ marketId }: OrderFormProps) {
         setStep("Privacy service unavailable. Switched to public mode.");
       } else if (normalized.includes("nonce too low")) {
         setStep("Error: Nonce too low. Wait for pending tx confirmation, then retry.");
+      } else if (
+        normalized.includes("insufficient funds") ||
+        normalized.includes("gas * price + value")
+      ) {
+        setStep("Insufficient MON for shielding or burner gas. Add MON and retry private buy.");
       } else {
         setStep(`Error: ${msg}`);
       }

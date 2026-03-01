@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useUnlink, useUnlinkBalance, useBurner, useDeposit } from "@unlink-xyz/react";
-import { useAccount, useChainId, useWalletClient } from "wagmi";
+import { useAccount, useChainId, usePublicClient, useWalletClient } from "wagmi";
 import { CONTRACTS, isConfiguredAddress, monadTestnet } from "@/lib/config";
 import { WMON_ABI } from "@/lib/contracts";
 import { parseEther, formatEther } from "viem";
@@ -11,6 +11,7 @@ export default function UnlinkWallet() {
   const { address } = useAccount();
   const chainId = useChainId();
   const { data: walletClient } = useWalletClient();
+  const publicClient = usePublicClient();
   const {
     walletExists,
     createWallet,
@@ -22,6 +23,7 @@ export default function UnlinkWallet() {
     error,
     clearError,
     refresh,
+    getTxStatus,
   } = useUnlink();
 
   const { balance: shieldedWmon } = useUnlinkBalance(CONTRACTS.WMON);
@@ -34,6 +36,30 @@ export default function UnlinkWallet() {
   const [unlinkUnavailable, setUnlinkUnavailable] = useState(false);
   const networkMismatch = chainId !== monadTestnet.id;
   const contractsReady = isConfiguredAddress(CONTRACTS.WMON);
+  const waitForHash = async (hash?: `0x${string}`) => {
+    if (!hash || !publicClient) return;
+    await publicClient.waitForTransactionReceipt({ hash });
+  };
+
+  const waitForRelay = async (relayId: string, timeoutMs = 120000) => {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      try {
+        const status = await getTxStatus(relayId);
+        if (status.state === "succeeded") return;
+        if (status.state === "failed" || status.state === "reverted" || status.state === "dead") {
+          throw new Error(status.error ?? `Relay ${relayId} failed with state ${status.state}`);
+        }
+      } catch (error: unknown) {
+        const msg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+        if (!msg.includes("404")) {
+          throw error;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+    return false;
+  };
 
   const handleCreate = async () => {
     try {
@@ -61,13 +87,14 @@ export default function UnlinkWallet() {
       const amount = parseEther(depositAmount);
 
       // Native MON UX: wrap MON into WMON before shielding.
-      await walletClient.writeContract({
+      const wrapHash = await walletClient.writeContract({
         address: CONTRACTS.WMON,
         abi: WMON_ABI,
         functionName: "deposit",
         args: [],
         value: amount,
       });
+      await waitForHash(wrapHash);
 
       // Prepare deposit to get the target pool address
       const result = await doDeposit([
@@ -75,23 +102,27 @@ export default function UnlinkWallet() {
       ]);
       setUnlinkUnavailable(false);
 
-      // Submit the relay transaction on-chain if needed
-      if (result && "calldata" in result) {
-        // Approve the Unlink pool to spend WMON before depositing
-        await walletClient.writeContract({
-          address: CONTRACTS.WMON,
-          abi: WMON_ABI,
-          functionName: "approve",
-          args: [result.to as `0x${string}`, amount],
-        });
+      // Approve the Unlink pool to spend WMON before depositing
+      const approveHash = await walletClient.writeContract({
+        address: CONTRACTS.WMON,
+        abi: WMON_ABI,
+        functionName: "approve",
+        args: [result.to as `0x${string}`, amount],
+      });
+      await waitForHash(approveHash);
 
-        // Now execute the deposit (pool calls transferFrom)
-        await walletClient.sendTransaction({
-          to: result.to as `0x${string}`,
-          data: result.calldata as `0x${string}`,
-          value: result.value ? BigInt(result.value) : 0n,
-        });
+      // Execute the shield deposit (pool pulls WMON via transferFrom)
+      const shieldHash = await walletClient.sendTransaction({
+        to: result.to as `0x${string}`,
+        data: result.calldata as `0x${string}`,
+        value: result.value,
+      });
+      await waitForHash(shieldHash);
+      const confirmed = await waitForRelay(result.relayId);
+      if (!confirmed) {
+        console.warn(`Relay confirmation still pending for ${result.relayId}.`);
       }
+      await refresh();
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
       if (msg.includes("404") || msg.includes("server_error") || msg.includes("http timeout")) {
