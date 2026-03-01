@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { useMarketCount, useMarkets, useFaucet, usePrivaUSDBalance } from "@/hooks/usePrivateMarket";
 import { useAccount } from "wagmi";
 import { formatEther } from "viem";
@@ -8,6 +9,9 @@ import CreateMarket from "@/components/CreateMarket";
 import UnlinkWallet from "@/components/UnlinkWallet";
 
 export default function HomePage() {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   const { address } = useAccount();
   const { data: count } = useMarketCount();
   const { data: markets, isLoading } = useMarkets(Number(count ?? 0));
@@ -30,12 +34,12 @@ export default function HomePage() {
       </div>
 
       {/* Wallet Balance + Faucet */}
-      {address && (
+      {mounted && address && (
         <div className="flex items-center justify-between rounded-xl border border-white/10 bg-white/5 px-5 py-3">
           <div className="text-sm text-white/50">
             PrivaUSD Balance:{" "}
             <span className="font-mono text-white font-semibold">
-              {pusdBalance ? Number(formatEther(pusdBalance)).toLocaleString() : "0"}
+              {mounted && pusdBalance ? Number(formatEther(pusdBalance)).toFixed(2) : "0"}
             </span>
             <span className="text-white/40 ml-1">PUSD</span>
           </div>

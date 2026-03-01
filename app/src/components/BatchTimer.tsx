@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect } from "react";
 import { useBatchTimer, useBatchAuction } from "@/hooks/useBatchAuction";
 
 interface BatchTimerProps {
@@ -10,7 +11,15 @@ interface BatchTimerProps {
 
 export default function BatchTimer({ marketId, batchInterval, lastClearTime }: BatchTimerProps) {
   const { timeLeft, canClear } = useBatchTimer(marketId, batchInterval, lastClearTime);
-  const { currentBatchId, orderCount, triggerClear, isClearing } = useBatchAuction(marketId);
+  const { currentBatchId, orderCount, triggerClear, isClearing, autoClear, setAutoClear, autoClearFiredRef } = useBatchAuction(marketId);
+
+  // Auto-clear when timer expires and there are orders
+  useEffect(() => {
+    if (autoClear && canClear && orderCount > 0 && !isClearing && !autoClearFiredRef.current) {
+      autoClearFiredRef.current = true;
+      triggerClear();
+    }
+  }, [autoClear, canClear, orderCount, isClearing, triggerClear, autoClearFiredRef]);
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-5">
@@ -50,6 +59,17 @@ export default function BatchTimer({ marketId, batchInterval, lastClearTime }: B
       >
         {isClearing ? "Clearing..." : canClear ? "Clear Batch" : "Waiting..."}
       </button>
+
+      {/* Auto-clear toggle */}
+      <div className="flex items-center justify-between mt-3">
+        <span className="text-xs text-white/40">Auto-clear when ready</span>
+        <button
+          onClick={() => setAutoClear(!autoClear)}
+          className={`relative h-5 w-9 rounded-full transition ${autoClear ? "bg-emerald-600" : "bg-white/20"}`}
+        >
+          <span className={`absolute top-0.5 left-0.5 h-4 w-4 rounded-full bg-white transition ${autoClear ? "translate-x-4" : ""}`} />
+        </button>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useReadContract } from "wagmi";
 import { PRIVATEMARKET_ABI } from "@/lib/contracts";
 import { CONTRACTS } from "@/lib/config";
@@ -29,14 +29,14 @@ export function useBatchTimer(marketId: number, batchInterval: number, lastClear
 }
 
 export function useBatchAuction(marketId: number) {
-  const { data: currentBatchId } = useReadContract({
+  const { data: currentBatchId, refetch: refetchBatchId } = useReadContract({
     address: CONTRACTS.PRIVATE_MARKET,
     abi: PRIVATEMARKET_ABI,
     functionName: "getCurrentBatchId",
     args: [BigInt(marketId)],
   });
 
-  const { data: batchOrders } = useReadContract({
+  const { data: batchOrders, refetch: refetchOrders } = useReadContract({
     address: CONTRACTS.PRIVATE_MARKET,
     abi: PRIVATEMARKET_ABI,
     functionName: "getBatchOrders",
@@ -45,10 +45,21 @@ export function useBatchAuction(marketId: number) {
   });
 
   const { clearBatch, isConfirming, isSuccess } = useClearBatch();
+  const [autoClear, setAutoClear] = useState(true);
+  const autoClearFiredRef = useRef(false);
 
   const triggerClear = useCallback(() => {
     clearBatch(marketId);
   }, [clearBatch, marketId]);
+
+  // Refetch data after successful clear
+  useEffect(() => {
+    if (isSuccess) {
+      autoClearFiredRef.current = false;
+      refetchBatchId();
+      refetchOrders();
+    }
+  }, [isSuccess, refetchBatchId, refetchOrders]);
 
   return {
     currentBatchId: currentBatchId ? Number(currentBatchId) : 0,
@@ -56,5 +67,8 @@ export function useBatchAuction(marketId: number) {
     triggerClear,
     isClearing: isConfirming,
     clearSuccess: isSuccess,
+    autoClear,
+    setAutoClear,
+    autoClearFiredRef,
   };
 }

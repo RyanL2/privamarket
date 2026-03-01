@@ -37,9 +37,16 @@ export default function OrderForm({ marketId, question }: OrderFormProps) {
 
       if (usePrivacy && walletExists && ready) {
         // === Private order via burner ===
-        setStep("Creating burner...");
-        const burnerIndex = burners.length;
-        const burner = await createBurner(burnerIndex);
+        let burnerIndex: number;
+        if (burners.length > 0) {
+          // Reuse the latest burner account
+          burnerIndex = burners.length - 1;
+          setStep("Using burner account...");
+        } else {
+          setStep("Creating burner account...");
+          burnerIndex = 0;
+          await createBurner(burnerIndex);
+        }
 
         setStep("Funding burner from shielded pool...");
         await fund.execute({
@@ -92,7 +99,12 @@ export default function OrderForm({ marketId, question }: OrderFormProps) {
       }
     } catch (e: any) {
       console.error("Order failed:", e);
-      setStep(`Error: ${e.shortMessage || e.message}`);
+      const msg = e.shortMessage || e.message || String(e);
+      if (msg.includes("404") || msg.includes("SERVER_ERROR")) {
+        setStep("Error: Unlink privacy service unavailable. Try a public order instead.");
+      } else {
+        setStep(`Error: ${msg}`);
+      }
     } finally {
       setIsSubmitting(false);
     }
@@ -128,7 +140,9 @@ export default function OrderForm({ marketId, question }: OrderFormProps) {
 
       {/* Price input */}
       <div>
-        <label className="block text-xs text-white/40 mb-1">Price (probability %)</label>
+        <label className="block text-xs text-white/40 mb-1">
+          {side} price (% of payout)
+        </label>
         <div className="flex items-center gap-2">
           <input
             type="range"
@@ -187,6 +201,12 @@ export default function OrderForm({ marketId, question }: OrderFormProps) {
               : "0"} PUSD
           </span>
         </div>
+        <div className="flex justify-between text-white/30 mt-1">
+          <span>Return</span>
+          <span className="font-mono">
+            {price ? `${(100 / parseFloat(price)).toFixed(1)}x` : "—"}
+          </span>
+        </div>
       </div>
 
       {/* Submit */}
@@ -207,6 +227,10 @@ export default function OrderForm({ marketId, question }: OrderFormProps) {
       {!address && (
         <p className="text-xs text-center text-white/30">Connect wallet to trade</p>
       )}
+
+      <p className="text-xs text-white/25 text-center">
+        Orders persist across batches until matched. Both YES and NO orders are needed for price discovery.
+      </p>
     </div>
   );
 }

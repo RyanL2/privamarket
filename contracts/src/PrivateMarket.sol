@@ -57,6 +57,7 @@ contract PrivateMarket {
     event BatchCleared(uint256 indexed marketId, uint256 indexed batchId, uint256 clearingPrice, uint256 yesVolume, uint256 noVolume);
     event MarketResolved(uint256 indexed marketId, Outcome outcome);
     event Redeemed(uint256 indexed marketId, address indexed trader, uint256 amount, uint256 payout);
+    event OrderCancelled(uint256 indexed marketId, uint256 indexed batchId, uint256 orderIndex, address trader, uint256 amount);
 
     // ─── Errors ────────────────────────────────────────────
     error OnlyAdmin();
@@ -67,6 +68,8 @@ contract PrivateMarket {
     error BatchNotReady();
     error InvalidOutcome();
     error TransferFailed();
+    error NotOrderOwner();
+    error OrderAlreadyFilled();
 
     // ─── Modifiers ─────────────────────────────────────────
     modifier onlyAdmin() {
@@ -186,8 +189,8 @@ contract PrivateMarket {
         }
 
         if (yesCount == 0 || noCount == 0) {
-            // No crossing possible — refund all orders
-            _refundAll(orders);
+            // No crossing possible — carry all orders to next batch
+            _carryForward(marketId, batchId + 1, orders);
             batchResults[marketId][batchId] = BatchResult(5000, 0, 0, block.timestamp);
             emit BatchCleared(marketId, batchId, 5000, 0, 0);
             return;
@@ -240,8 +243,8 @@ contract PrivateMarket {
                 noVolume += o.amount;
                 m.collateralPool += o.amount;
             } else {
-                // Refund unfilled order
-                IERC20(collateralToken).transfer(o.trader, o.amount);
+                // Carry unfilled order to next batch
+                _batchOrders[marketId][batchId + 1].push(o);
             }
         }
 
@@ -249,10 +252,30 @@ contract PrivateMarket {
         emit BatchCleared(marketId, batchId, clearingPrice, yesVolume, noVolume);
     }
 
-    function _refundAll(Order[] storage orders) internal {
+    function _carryForward(uint256 marketId, uint256 nextBatchId, Order[] storage orders) internal {
         for (uint256 i; i < orders.length; i++) {
-            IERC20(collateralToken).transfer(orders[i].trader, orders[i].amount);
+            _batchOrders[marketId][nextBatchId].push(orders[i]);
         }
+    }
+
+    // ─── Order Cancellation ──────────────────────────────────
+
+    /// @notice Cancel a pending (unfilled) order and reclaim collateral
+    /// @param marketId The market containing the order
+    /// @param batchId The batch containing the order
+    /// @param orderIndex The index of the order within the batch
+    function cancelOrder(uint256 marketId, uint256 batchId, uint256 orderIndex) external {
+        Order storage o = _batchOrders[marketId][batchId][orderIndex];
+        if (o.trader != msg.sender) revert NotOrderOwner();
+        if (o.filled) revert OrderAlreadyFilled();
+        if (o.amount == 0) revert ZeroAmount();
+
+        uint256 refundAmount = o.amount;
+        o.amount = 0;
+        o.filled = true;
+
+        IERC20(collateralToken).transfer(msg.sender, refundAmount);
+        emit OrderCancelled(marketId, batchId, orderIndex, msg.sender, refundAmount);
     }
 
     // ─── Resolution & Redemption ───────────────────────────

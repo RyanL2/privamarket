@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { formatEther } from "viem";
 import type { MarketData } from "@/hooks/usePrivateMarket";
@@ -7,10 +8,14 @@ import type { MarketData } from "@/hooks/usePrivateMarket";
 const OUTCOME_LABELS = ["Unresolved", "YES", "NO"] as const;
 
 export default function MarketCard({ market }: { market: MarketData }) {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   const resolutionDate = new Date(Number(market.resolutionTime) * 1000);
   const isResolved = market.resolved !== 0;
-  const timeLeft = resolutionDate.getTime() - Date.now();
-  const daysLeft = Math.max(0, Math.ceil(timeLeft / (1000 * 60 * 60 * 24)));
+  const daysLeft = mounted
+    ? Math.max(0, Math.ceil((resolutionDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24)))
+    : 0;
 
   return (
     <Link
@@ -34,7 +39,7 @@ export default function MarketCard({ market }: { market: MarketData }) {
         <div className="rounded-lg bg-white/5 p-2.5 text-center">
           <div className="text-xs text-white/40 mb-0.5">Pool</div>
           <div className="text-sm font-mono font-semibold text-white">
-            {Number(formatEther(market.collateralPool)).toLocaleString()}
+            {Number(formatEther(market.collateralPool)).toFixed(2)}
             <span className="text-xs text-white/40 ml-0.5">PUSD</span>
           </div>
         </div>
@@ -47,7 +52,7 @@ export default function MarketCard({ market }: { market: MarketData }) {
         <div className="rounded-lg bg-white/5 p-2.5 text-center">
           <div className="text-xs text-white/40 mb-0.5">Resolves</div>
           <div className="text-sm font-mono font-semibold text-white">
-            {isResolved ? "Done" : `${daysLeft}d`}
+            {isResolved ? "Done" : mounted ? `${daysLeft}d` : "—"}
           </div>
         </div>
       </div>

@@ -51,23 +51,37 @@ export default function UnlinkWallet() {
   const handleDeposit = async () => {
     if (!address || !walletClient) return;
     try {
-      // First approve PrivaUSD to Unlink pool
       const amount = parseEther(depositAmount);
-      // Execute deposit through Unlink
+
+      // Prepare deposit to get the target pool address
       const result = await doDeposit([
         { token: CONTRACTS.PRIVAUSD, amount, depositor: address },
       ]);
 
       // Submit the relay transaction on-chain if needed
       if (result && "calldata" in result) {
+        // Approve the Unlink pool to spend PrivaUSD before depositing
+        await walletClient.writeContract({
+          address: CONTRACTS.PRIVAUSD,
+          abi: PRIVAUSD_ABI,
+          functionName: "approve",
+          args: [result.to as `0x${string}`, amount],
+        });
+
+        // Now execute the deposit (pool calls transferFrom)
         await walletClient.sendTransaction({
           to: result.to as `0x${string}`,
           data: result.calldata as `0x${string}`,
           value: result.value ? BigInt(result.value) : 0n,
         });
       }
-    } catch (e) {
-      console.error("Deposit failed:", e);
+    } catch (e: any) {
+      const msg = e?.message || String(e);
+      if (msg.includes("404") || msg.includes("SERVER_ERROR")) {
+        console.error("Unlink service unavailable:", e);
+      } else {
+        console.error("Deposit failed:", e);
+      }
     }
   };
 
@@ -109,7 +123,10 @@ export default function UnlinkWallet() {
 
       {!walletExists ? (
         <div className="space-y-3">
-          <p className="text-sm text-white/50">Create or import an Unlink privacy wallet to start trading privately.</p>
+          <p className="text-sm text-white/50">
+            The privacy wallet hides your identity when trading. It creates temporary &ldquo;burner&rdquo; accounts
+            so your orders can&apos;t be traced back to you, preventing MEV attacks and front-running.
+          </p>
           <button
             onClick={handleCreate}
             disabled={busy}
@@ -144,8 +161,13 @@ export default function UnlinkWallet() {
         <div className="space-y-4">
           {showMnemonic && (
             <div className="rounded-lg bg-amber-500/10 border border-amber-500/20 p-3">
-              <p className="text-xs text-amber-400 font-medium mb-1">Save your mnemonic (shown once):</p>
-              <p className="text-xs text-white font-mono break-all">{showMnemonic}</p>
+              <p className="text-xs text-amber-400 font-medium mb-1">
+                Your secret key (mnemonic phrase) — save it now, it won&apos;t be shown again:
+              </p>
+              <p className="text-xs text-white font-mono break-all select-all bg-black/30 rounded p-2 mt-1">{showMnemonic}</p>
+              <p className="text-xs text-amber-400/70 mt-1">
+                This phrase controls your privacy wallet and all burner accounts. Keep it safe.
+              </p>
               <button
                 onClick={() => setShowMnemonic("")}
                 className="mt-2 text-xs text-amber-400 hover:text-amber-300"

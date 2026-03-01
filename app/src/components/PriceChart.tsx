@@ -37,12 +37,16 @@ export default function PriceChart({ marketId, currentBatchId }: PriceChartProps
       if (r.status === "success" && r.result) {
         const batch = r.result as unknown as BatchResult;
         if (batch.timestamp > 0n && batch.clearingPrice > 0n) {
-          points.push({
-            batchId: startBatch + i,
-            price: Number(batch.clearingPrice) / 100,
-            volume: Number(batch.yesVolume) + Number(batch.noVolume),
-            timestamp: Number(batch.timestamp),
-          });
+          // Skip batches where all orders were refunded (single-sided, no real price discovery)
+          const totalVolume = Number(batch.yesVolume) + Number(batch.noVolume);
+          if (totalVolume > 0) {
+            points.push({
+              batchId: startBatch + i,
+              price: Number(batch.clearingPrice) / 100,
+              volume: totalVolume,
+              timestamp: Number(batch.timestamp),
+            });
+          }
         }
       }
     }
@@ -53,7 +57,7 @@ export default function PriceChart({ marketId, currentBatchId }: PriceChartProps
       <div className="rounded-xl border border-white/10 bg-white/[0.03] p-5">
         <h3 className="text-sm font-semibold text-white/60 uppercase tracking-wider mb-3">Price History</h3>
         <div className="h-40 flex items-center justify-center text-white/20 text-sm">
-          No batch data yet. Place orders and clear batches to see price history.
+          No price data yet. Both YES and NO orders are needed in the same batch for price discovery.
         </div>
       </div>
     );

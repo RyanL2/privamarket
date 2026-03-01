@@ -136,7 +136,7 @@ contract PrivateMarketTest is Test {
         assertTrue(OutcomeToken(yesToken).totalSupply() > 0 || OutcomeToken(noToken).totalSupply() > 0);
     }
 
-    function test_clearBatch_refundsWhenNoCounterparty() public {
+    function test_clearBatch_carriesForwardWhenNoCounterparty() public {
         market.createMarket("Test?", block.timestamp + 1 days, 5);
 
         // Only YES orders, no NO orders
@@ -150,9 +150,47 @@ contract PrivateMarketTest is Test {
         vm.warp(block.timestamp + 6);
         market.clearBatch(0);
 
-        // Alice should be refunded
+        // Alice should NOT be refunded — order carries to next batch
+        uint256 balanceAfter = privaUSD.balanceOf(alice);
+        assertEq(balanceAfter, balanceBefore);
+
+        // Order should exist in batch 1 (next batch)
+        PrivateMarket.Order[] memory nextOrders = market.getBatchOrders(0, 1);
+        assertEq(nextOrders.length, 1);
+        assertEq(nextOrders[0].trader, alice);
+        assertEq(nextOrders[0].amount, 100 ether);
+        assertEq(uint8(nextOrders[0].side), uint8(PrivateMarket.Side.YES));
+    }
+
+    function test_cancelOrder() public {
+        market.createMarket("Test?", block.timestamp + 1 days, 5);
+
+        vm.startPrank(alice);
+        privaUSD.approve(address(market), 100 ether);
+        market.placeOrder(0, PrivateMarket.Side.YES, 6000, 100 ether);
+        vm.stopPrank();
+
+        uint256 balanceBefore = privaUSD.balanceOf(alice);
+
+        // Alice cancels her order
+        vm.prank(alice);
+        market.cancelOrder(0, 0, 0);
+
         uint256 balanceAfter = privaUSD.balanceOf(alice);
         assertEq(balanceAfter - balanceBefore, 100 ether);
+    }
+
+    function test_cancelOrder_revertsForNonOwner() public {
+        market.createMarket("Test?", block.timestamp + 1 days, 5);
+
+        vm.startPrank(alice);
+        privaUSD.approve(address(market), 100 ether);
+        market.placeOrder(0, PrivateMarket.Side.YES, 6000, 100 ether);
+        vm.stopPrank();
+
+        vm.prank(bob);
+        vm.expectRevert(PrivateMarket.NotOrderOwner.selector);
+        market.cancelOrder(0, 0, 0);
     }
 
     function test_clearBatch_revertsBeforeInterval() public {

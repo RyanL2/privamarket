@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import { useMarket, useBatchResult } from "@/hooks/usePrivateMarket";
 import { formatEther } from "viem";
@@ -11,6 +12,9 @@ import PriceChart from "@/components/PriceChart";
 const OUTCOME_LABELS = ["Unresolved", "YES", "NO"] as const;
 
 export default function MarketPage() {
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
+
   const params = useParams();
   const marketId = Number(params.id);
   const { data: market, isLoading } = useMarket(marketId);
@@ -53,7 +57,7 @@ export default function MarketPage() {
         <h1 className="text-2xl font-bold mt-2">{market.question}</h1>
         <div className="flex items-center gap-4 mt-2 text-sm text-white/40">
           <span>
-            Resolves: {resolutionDate.toLocaleDateString()}
+            Resolves: {mounted ? resolutionDate.toLocaleDateString() : "—"}
           </span>
           {isResolved && (
             <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${
@@ -86,7 +90,7 @@ export default function MarketPage() {
         <div className="rounded-lg bg-white/5 p-3 text-center">
           <div className="text-xs text-white/40">Pool</div>
           <div className="text-sm font-mono font-semibold mt-1">
-            {Number(formatEther(market.collateralPool)).toLocaleString()} PUSD
+            {Number(formatEther(market.collateralPool)).toFixed(2)} PUSD
           </div>
         </div>
         <div className="rounded-lg bg-white/5 p-3 text-center">
@@ -125,11 +129,11 @@ export default function MarketPage() {
             </div>
             <div>
               <span className="text-white/40">YES Vol: </span>
-              <span className="font-mono">{Number(formatEther(lastBatch.yesVolume)).toLocaleString()} PUSD</span>
+              <span className="font-mono">{Number(formatEther(lastBatch.yesVolume)).toFixed(2)} PUSD</span>
             </div>
             <div>
               <span className="text-white/40">NO Vol: </span>
-              <span className="font-mono">{Number(formatEther(lastBatch.noVolume)).toLocaleString()} PUSD</span>
+              <span className="font-mono">{Number(formatEther(lastBatch.noVolume)).toFixed(2)} PUSD</span>
             </div>
           </div>
         </div>

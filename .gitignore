@@ -7,3 +7,4 @@ cache/
 .DS_Store
 contracts/out/
 contracts/cache/
+SPEC.md
