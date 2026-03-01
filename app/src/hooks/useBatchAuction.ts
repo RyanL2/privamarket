@@ -41,6 +41,10 @@ export function useBatchAuction(marketId: number) {
     abi: PRIVATEMARKET_ABI,
     functionName: "getCurrentBatchId",
     args: [BigInt(marketId)],
+    query: {
+      refetchInterval: 3000,
+      refetchOnWindowFocus: true,
+    },
   });
 
   const { data: batchOrders, refetch: refetchOrders } = useReadContract({
@@ -48,7 +52,11 @@ export function useBatchAuction(marketId: number) {
     abi: PRIVATEMARKET_ABI,
     functionName: "getBatchOrders",
     args: [BigInt(marketId), currentBatchId ?? 0n],
-    query: { enabled: currentBatchId !== undefined },
+    query: {
+      enabled: currentBatchId !== undefined,
+      refetchInterval: 3000,
+      refetchOnWindowFocus: true,
+    },
   });
 
   const { clearBatch, hash: clearHash, isSubmitting, isConfirming, isSuccess, clearError } = useClearBatch();
@@ -77,6 +85,17 @@ export function useBatchAuction(marketId: number) {
       autoClearFiredRef.current = false;
     }
   }, [clearError]);
+
+  useEffect(() => {
+    const handleOrderSubmitted = () => {
+      autoClearFiredRef.current = false;
+      void refetchBatchId();
+      void refetchOrders();
+    };
+
+    window.addEventListener("privamarket:order-submitted", handleOrderSubmitted);
+    return () => window.removeEventListener("privamarket:order-submitted", handleOrderSubmitted);
+  }, [refetchBatchId, refetchOrders]);
 
   // Refetch data after successful clear
   useEffect(() => {

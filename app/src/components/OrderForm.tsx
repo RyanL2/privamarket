@@ -17,6 +17,10 @@ type Side = "YES" | "NO";
 const MIN_BURNER_GAS_BALANCE = parseEther("0.01");
 const BURNER_TX_GAS_LIMIT = 300000n;
 const BURNER_GAS_BUFFER = parseEther("0.002");
+type BurnerFeeParams = {
+  maxFeePerGas?: bigint;
+  maxPriorityFeePerGas?: bigint;
+};
 
 export default function OrderForm({ marketId, marketYesPriceBps }: OrderFormProps) {
   const { address } = useAccount();
@@ -49,6 +53,10 @@ export default function OrderForm({ marketId, marketYesPriceBps }: OrderFormProp
     ? (parsedAmount / (marketSidePricePct / 100)).toFixed(2)
     : "—";
   const marketReturn = marketSidePricePct > 0 ? `${(100 / marketSidePricePct).toFixed(1)}x` : "—";
+  const isErrorStep = step.toLowerCase().startsWith("error");
+  const notifyOrderSubmitted = () => {
+    window.dispatchEvent(new CustomEvent("privamarket:order-submitted", { detail: { marketId } }));
+  };
 
   const waitForHash = async (hash?: `0x${string}`) => {
     if (!hash || !publicClient) return;
@@ -87,20 +95,34 @@ export default function OrderForm({ marketId, marketYesPriceBps }: OrderFormProp
       transport: http(monadTestnet.rpcUrls.default.http[0]),
     });
     const fees = await publicClient?.estimateFeesPerGas().catch(() => null);
-    const txParams = fees?.maxFeePerGas
+    const txParams: BurnerFeeParams = fees?.maxFeePerGas
       ? {
           maxFeePerGas: fees.maxFeePerGas,
           maxPriorityFeePerGas: fees.maxPriorityFeePerGas,
         }
-      : fees?.gasPrice
-        ? { gasPrice: fees.gasPrice }
-        : {};
-    const hash = await burnerClient.sendTransaction({
+      : {};
+    const sendTx = (params: BurnerFeeParams = {}) => burnerClient.sendTransaction({
       to,
       data,
       gas: BURNER_TX_GAS_LIMIT,
-      ...txParams,
+      ...params,
     });
+
+    let hash: `0x${string}`;
+    try {
+      hash = await sendTx(txParams);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+      if (
+        msg.includes("internal error") ||
+        msg.includes("max fee per gas") ||
+        msg.includes("eip-1559")
+      ) {
+        hash = await sendTx();
+      } else {
+        throw error;
+      }
+    }
     await waitForHash(hash);
     return hash;
   };
@@ -285,6 +307,7 @@ export default function OrderForm({ marketId, marketYesPriceBps }: OrderFormProp
   };
 
   const handleSubmit = async () => {
+    setStep("");
     if (!address || !walletClient || submitLockRef.current) return;
     if (networkMismatch) {
       setStep("Switch to Monad Testnet to place orders.");
@@ -371,6 +394,7 @@ export default function OrderForm({ marketId, marketYesPriceBps }: OrderFormProp
         await sendBurnerTx(burnerIndex, CONTRACTS.PRIVATE_MARKET, orderData);
 
         setStep("Private order submitted!");
+        notifyOrderSubmitted();
       } else {
         // === Public order (fallback) ===
         setStep("Wrapping MON to WMON...");
@@ -399,9 +423,10 @@ export default function OrderForm({ marketId, marketYesPriceBps }: OrderFormProp
           functionName: "placeOrder",
           args: [BigInt(marketId), side === "YES" ? 0 : 1, BigInt(priceInBps), amountWei],
         });
-        void orderHash;
+        await waitForHash(orderHash);
 
         setStep("Order submitted!");
+        notifyOrderSubmitted();
       }
     } catch (error: unknown) {
       console.error("Order failed:", error);
@@ -544,6 +569,11 @@ export default function OrderForm({ marketId, marketYesPriceBps }: OrderFormProp
           ? step
           : `${usePrivacy && walletExists ? "Private " : ""}Buy ${side}`}
       </button>
+      {!isSubmitting && step && (
+        <p className={`text-xs text-center ${isErrorStep ? "text-red-400" : "text-emerald-400/80"}`}>
+          {step}
+        </p>
+      )}
 
       {!address && (
         <p className="text-xs text-center text-white/30">Connect wallet to trade</p>
