@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
 import Web3Provider from "@/providers/Web3Provider";
 import NavBar from "@/components/NavBar";
@@ -34,6 +35,7 @@ export default function RootLayout({
           <main className="max-w-6xl mx-auto px-6 py-8">
             {children}
           </main>
+          <SpeedInsights />
         </Web3Provider>
       </body>
     </html>
