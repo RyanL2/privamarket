@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
 import { useParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { useMarket, useBatchResult } from "@/hooks/usePrivateMarket";
@@ -41,9 +42,9 @@ export default function MarketPage() {
     return (
       <div className="text-center py-16">
         <h2 className="text-xl text-white/50">Market not found</h2>
-        <a href="/" className="text-violet-400 hover:text-violet-300 text-sm mt-2 inline-block">
+        <Link href="/" className="text-violet-400 hover:text-violet-300 text-sm mt-2 inline-block">
           Back to markets
-        </a>
+        </Link>
       </div>
     );
   }
@@ -56,9 +57,9 @@ export default function MarketPage() {
     <div className="space-y-6">
       {/* Header */}
       <div>
-        <a href="/" className="text-sm text-white/40 hover:text-white/60 transition">
+        <Link href="/" className="text-sm text-white/40 hover:text-white/60 transition">
           &larr; All Markets
-        </a>
+        </Link>
         <h1 className="text-2xl font-bold mt-2">{market.question}</h1>
         <div className="flex items-center gap-4 mt-2 text-sm text-white/40">
           <span>
